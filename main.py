@@ -15,7 +15,7 @@ from openpyxl.utils import get_column_letter
 app = FastAPI(
     title="Scriptora Suite API",
     description="Scriptora Suite: analítica textual, evaluación escritural, proceso de escritura, multitexto y exportación Excel.",
-    version="0.8.0"
+    version="0.8.1"
 )
 
 
@@ -169,38 +169,6 @@ def detect_closure(text: str):
 # SCRIPTORA T
 # ============================================================
 
-def analyze_text_core(text: str):
-    text = text.strip()
-    words = tokenize_words(text)
-    sentences = split_sentences(text)
-
-    word_count = len(words)
-    char_count = len(text)
-    sentence_count = len(sentences)
-    unique_words = len(set(words))
-    avg_sentence_length = round(word_count / sentence_count, 2) if sentence_count > 0 else 0
-    ttr = round(unique_words / word_count, 3) if word_count > 0 else 0
-    lexical_density = estimate_lexical_density(words)
-
-    interpretation = interpret_text_metrics(
-        word_count,
-        avg_sentence_length,
-        lexical_density,
-        ttr
-    )
-
-    return {
-        "word_count": word_count,
-        "char_count": char_count,
-        "sentence_count": sentence_count,
-        "unique_words": unique_words,
-        "avg_sentence_length": avg_sentence_length,
-        "type_token_ratio": ttr,
-        "lexical_density_proxy": lexical_density,
-        "interpretation_text": interpretation
-    }
-
-
 def interpret_text_metrics(word_count, avg_sentence_length, lexical_density, ttr):
     comments = []
 
@@ -233,6 +201,38 @@ def interpret_text_metrics(word_count, avg_sentence_length, lexical_density, ttr
         comments.append("La diversidad léxica superficial es alta, aunque en textos breves este valor puede sobreestimarse.")
 
     return " ".join(comments)
+
+
+def analyze_text_core(text: str):
+    text = text.strip()
+    words = tokenize_words(text)
+    sentences = split_sentences(text)
+
+    word_count = len(words)
+    char_count = len(text)
+    sentence_count = len(sentences)
+    unique_words = len(set(words))
+    avg_sentence_length = round(word_count / sentence_count, 2) if sentence_count > 0 else 0
+    ttr = round(unique_words / word_count, 3) if word_count > 0 else 0
+    lexical_density = estimate_lexical_density(words)
+
+    interpretation = interpret_text_metrics(
+        word_count,
+        avg_sentence_length,
+        lexical_density,
+        ttr
+    )
+
+    return {
+        "word_count": word_count,
+        "char_count": char_count,
+        "sentence_count": sentence_count,
+        "unique_words": unique_words,
+        "avg_sentence_length": avg_sentence_length,
+        "type_token_ratio": ttr,
+        "lexical_density_proxy": lexical_density,
+        "interpretation_text": interpretation
+    }
 
 
 # ============================================================
@@ -652,7 +652,6 @@ def parse_multitext_input(raw_input: str):
 
 def analyze_multitext(request: MultiTextRequest):
     records = parse_multitext_input(request.raw_input)
-
     results = []
 
     for record in records:
@@ -1075,22 +1074,24 @@ def style_sheet(ws):
     autosize_columns(ws)
 
 
-def build_results_vertical_rows(flat_results):
-    dictionary_rows = build_variable_dictionary()
-    dictionary_map = {row["variable"]: row for row in dictionary_rows}
+def get_dictionary_info(variable):
+    clean_variable = variable
 
+    if clean_variable.startswith("product_"):
+        clean_variable = clean_variable.replace("product_", "", 1)
+
+    if clean_variable.startswith("process_"):
+        clean_variable = clean_variable.replace("process_", "", 1)
+
+    dictionary_map = {row["variable"]: row for row in build_variable_dictionary()}
+    return dictionary_map.get(clean_variable, {})
+
+
+def build_results_vertical_rows(flat_results):
     rows = []
 
     for variable, value in flat_results.items():
-        clean_variable = variable
-
-        if clean_variable.startswith("product_"):
-            clean_variable = clean_variable.replace("product_", "", 1)
-
-        if clean_variable.startswith("process_"):
-            clean_variable = clean_variable.replace("process_", "", 1)
-
-        dict_info = dictionary_map.get(clean_variable, {})
+        dict_info = get_dictionary_info(variable)
 
         rows.append({
             "variable": variable,
@@ -1102,6 +1103,41 @@ def build_results_vertical_rows(flat_results):
         })
 
     return rows
+
+
+def add_dictionary_sheet(wb):
+    ws_dict = wb.create_sheet("diccionario_variables")
+    dictionary_rows = build_variable_dictionary()
+
+    dict_headers = [
+        "variable",
+        "nombre_amigable",
+        "modulo",
+        "dimension",
+        "descripcion",
+        "como_se_calcula",
+        "tipo_valor",
+        "rango_esperado",
+        "interpretacion_general",
+        "observaciones"
+    ]
+
+    ws_dict.append(dict_headers)
+
+    for row in dictionary_rows:
+        ws_dict.append([row.get(h, "") for h in dict_headers])
+
+    style_sheet(ws_dict)
+
+
+def add_metadata_sheet(wb, metadata):
+    ws_meta = wb.create_sheet("metadatos")
+    ws_meta.append(["campo", "valor"])
+
+    for key, value in metadata.items():
+        ws_meta.append([key, safe_value(value)])
+
+    style_sheet(ws_meta)
 
 
 def create_single_analysis_excel(export_data):
@@ -1174,8 +1210,7 @@ def create_multi_analysis_excel(rows, metadata):
         flat_row = flatten_dict(row)
 
         for variable, value in flat_row.items():
-            clean_variable = variable
-            dict_info = get_dictionary_info(clean_variable)
+            dict_info = get_dictionary_info(variable)
 
             ws_readable.append([
                 text_id,
@@ -1196,49 +1231,6 @@ def create_multi_analysis_excel(rows, metadata):
     wb.save(output)
     output.seek(0)
     return output
-
-
-def get_dictionary_info(variable):
-    clean_variable = variable
-    if clean_variable.startswith("scores_"):
-        clean_variable = clean_variable
-    dictionary_map = {row["variable"]: row for row in build_variable_dictionary()}
-    return dictionary_map.get(clean_variable, {})
-
-
-def add_dictionary_sheet(wb):
-    ws_dict = wb.create_sheet("diccionario_variables")
-    dictionary_rows = build_variable_dictionary()
-
-    dict_headers = [
-        "variable",
-        "nombre_amigable",
-        "modulo",
-        "dimension",
-        "descripcion",
-        "como_se_calcula",
-        "tipo_valor",
-        "rango_esperado",
-        "interpretacion_general",
-        "observaciones"
-    ]
-
-    ws_dict.append(dict_headers)
-
-    for row in dictionary_rows:
-        ws_dict.append([row.get(h, "") for h in dict_headers])
-
-    style_sheet(ws_dict)
-
-
-def add_metadata_sheet(wb, metadata):
-    ws_meta = wb.create_sheet("metadatos")
-    ws_meta.append(["campo", "valor"])
-
-    for key, value in metadata.items():
-        ws_meta.append([key, safe_value(value)])
-
-    style_sheet(ws_meta)
 
 
 # ============================================================
@@ -1370,10 +1362,10 @@ def home():
 <body>
 <div class="container">
     <h1>Scriptora Suite</h1>
-    <div class="subtitle">Analítica textual, evaluación escritural, regulación del proceso, multitexto y exportación Excel · v0.8</div>
+    <div class="subtitle">Analítica textual, evaluación escritural, regulación del proceso, multitexto y exportación Excel · v0.8.1</div>
 
     <label>Módulo de análisis</label>
-    <select id="module" onchange="updateModeHelp()">
+    <select id="module" onchange="handleModuleChange()">
         <option value="text">Scriptora T · Texto individual</option>
         <option value="write_product">Scriptora W · Producto escrito individual</option>
         <option value="write_process">Scriptora W · Producto + proceso escritural</option>
@@ -1381,13 +1373,15 @@ def home():
         <option value="write_product_multi">Scriptora W · Producto multitexto</option>
     </select>
 
-    <label>Modo de ingreso</label>
-    <select id="writingMode">
-        <option value="live">Escribir en vivo / capturar proceso</option>
-        <option value="pasted">Pegar texto ya escrito / solo producto</option>
-    </select>
+    <div id="writingModeBlock">
+        <label>Modo de ingreso</label>
+        <select id="writingMode">
+            <option value="live">Escribir en vivo / capturar proceso</option>
+            <option value="pasted">Pegar texto ya escrito / solo producto</option>
+        </select>
+    </div>
 
-    <div class="process-panel">
+    <div id="processPanel" class="process-panel">
         <strong>Registro de proceso escritural</strong>
         <div class="small-grid">
             <div class="small-box">Tiempo: <span id="timer">0</span> s</div>
@@ -1488,15 +1482,25 @@ let previousText = "";
 let maxTextLength = 0;
 let previousParagraphCount = 0;
 
-let lastAnalysisWasMulti = false;
-
 const LONG_PAUSE_THRESHOLD_MS = 3000;
 const REFORMULATION_DELTA = 25;
 
 const textarea = document.getElementById("textInput");
 
+function currentModule() {
+    return document.getElementById("module").value;
+}
+
+function isProcessModule() {
+    return currentModule() === "write_process";
+}
+
+function isMultiModule() {
+    return currentModule() === "text_multi" || currentModule() === "write_product_multi";
+}
+
 function updateModeHelp() {
-    const selectedModule = document.getElementById("module").value;
+    const selectedModule = currentModule();
     const help = document.getElementById("modeHelp");
 
     if (selectedModule === "text_multi" || selectedModule === "write_product_multi") {
@@ -1511,11 +1515,74 @@ function updateModeHelp() {
     } else if (selectedModule === "write_process") {
         help.innerHTML = "Modo proceso: escribe en vivo para capturar tiempo, pausas, ediciones y señales de regulación.";
     } else {
-        help.innerHTML = "Modo individual: pega o escribe un texto para analizar.";
+        help.innerHTML = "Modo individual: pega o escribe un texto para analizar. No se captura proceso ni tiempo.";
     }
 }
 
+function resetOnlyProcessCounters() {
+    sessionStarted = false;
+    writingStarted = false;
+    processClosed = false;
+
+    startTime = null;
+    firstInputTime = null;
+    lastInputTime = null;
+
+    finalTotalTimeSeconds = 0;
+    finalInitialLatencySeconds = 0;
+
+    longPauseCount = 0;
+    editCount = 0;
+    deletionCount = 0;
+    insertionCount = 0;
+    localAdjustmentCount = 0;
+    reformulationCount = 0;
+    expansionCount = 0;
+    reductionCount = 0;
+    macroAdjustmentCount = 0;
+    inputEventCount = 0;
+
+    previousText = "";
+    maxTextLength = 0;
+    previousParagraphCount = 0;
+
+    if (timerInterval) {
+        clearInterval(timerInterval);
+        timerInterval = null;
+    }
+
+    updatePanel();
+}
+
+function updateProcessPanelVisibility() {
+    const processPanel = document.getElementById("processPanel");
+    const writingModeBlock = document.getElementById("writingModeBlock");
+    const writingMode = document.getElementById("writingMode");
+
+    if (isProcessModule()) {
+        processPanel.style.display = "block";
+        writingModeBlock.style.display = "block";
+        writingMode.disabled = false;
+    } else {
+        resetOnlyProcessCounters();
+        processPanel.style.display = "none";
+        writingModeBlock.style.display = "none";
+        writingMode.value = "pasted";
+        writingMode.disabled = true;
+    }
+}
+
+function handleModuleChange() {
+    updateModeHelp();
+    updateProcessPanelVisibility();
+    document.getElementById("result").style.display = "none";
+}
+
 function startSessionIfNeeded() {
+    if (!isProcessModule()) {
+        return;
+    }
+
     if (!sessionStarted && !processClosed) {
         sessionStarted = true;
         startTime = Date.now();
@@ -1524,7 +1591,7 @@ function startSessionIfNeeded() {
 }
 
 function updateTimer() {
-    if (startTime && !processClosed) {
+    if (startTime && !processClosed && isProcessModule()) {
         const seconds = Math.floor((Date.now() - startTime) / 1000);
         document.getElementById("timer").innerText = seconds;
     }
@@ -1554,20 +1621,19 @@ function updatePanel() {
 }
 
 textarea.addEventListener("focus", function() {
-    startSessionIfNeeded();
+    if (isProcessModule()) {
+        startSessionIfNeeded();
+    }
 });
 
 textarea.addEventListener("paste", function() {
-    const selectedModule = document.getElementById("module").value;
-    if (selectedModule === "write_process") {
+    if (isProcessModule()) {
         document.getElementById("writingMode").value = "pasted";
     }
 });
 
 textarea.addEventListener("input", function() {
-    const selectedModule = document.getElementById("module").value;
-
-    if (selectedModule !== "write_process") {
+    if (!isProcessModule()) {
         return;
     }
 
@@ -1643,6 +1709,11 @@ textarea.addEventListener("input", function() {
 });
 
 function freezeProcess() {
+    if (!isProcessModule()) {
+        resetOnlyProcessCounters();
+        return;
+    }
+
     const now = Date.now();
 
     finalTotalTimeSeconds = startTime ? Math.floor((now - startTime) / 1000) : 0;
@@ -1659,58 +1730,13 @@ function freezeProcess() {
 }
 
 function resetProcessCapture() {
-    sessionStarted = false;
-    writingStarted = false;
-    processClosed = false;
-
-    startTime = null;
-    firstInputTime = null;
-    lastInputTime = null;
-
-    finalTotalTimeSeconds = 0;
-    finalInitialLatencySeconds = 0;
-
-    longPauseCount = 0;
-    editCount = 0;
-    deletionCount = 0;
-    insertionCount = 0;
-    localAdjustmentCount = 0;
-    reformulationCount = 0;
-    expansionCount = 0;
-    reductionCount = 0;
-    macroAdjustmentCount = 0;
-    inputEventCount = 0;
-
-    previousText = "";
-    maxTextLength = 0;
-    previousParagraphCount = 0;
-
-    lastAnalysisWasMulti = false;
-
-    if (timerInterval) {
-        clearInterval(timerInterval);
-        timerInterval = null;
-    }
-
-    document.getElementById("timer").innerText = "0";
-    document.getElementById("latency").innerText = "0";
-    document.getElementById("longPauses").innerText = "0";
-    document.getElementById("edits").innerText = "0";
-    document.getElementById("insertions").innerText = "0";
-    document.getElementById("deletions").innerText = "0";
-    document.getElementById("localAdjustments").innerText = "0";
-    document.getElementById("reformulations").innerText = "0";
-    document.getElementById("expansions").innerText = "0";
-    document.getElementById("reductions").innerText = "0";
-    document.getElementById("macroAdjustments").innerText = "0";
-    document.getElementById("events").innerText = "0";
-
+    resetOnlyProcessCounters();
     document.getElementById("textInput").value = "";
     document.getElementById("result").style.display = "none";
 }
 
 async function runScriptora() {
-    const selectedModule = document.getElementById("module").value;
+    const selectedModule = currentModule();
     const writingMode = document.getElementById("writingMode").value;
     const text = document.getElementById("textInput").value;
     const level = document.getElementById("level").value;
@@ -1725,9 +1751,7 @@ async function runScriptora() {
     document.getElementById("processSection").style.display = "none";
     document.getElementById("integratedSection").style.display = "none";
 
-    if (selectedModule === "text_multi" || selectedModule === "write_product_multi") {
-        lastAnalysisWasMulti = true;
-
+    if (isMultiModule()) {
         const response = await fetch("/api/multi/analyze", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
@@ -1754,8 +1778,6 @@ async function runScriptora() {
         document.getElementById("interpretation").innerText = "Análisis multitexto completado. Descarga el Excel para revisar la matriz completa por texto.";
         return;
     }
-
-    lastAnalysisWasMulti = false;
 
     if (selectedModule === "write_process" && !processClosed) {
         freezeProcess();
@@ -1957,7 +1979,7 @@ function renderMultiPreview(results) {
 }
 
 async function downloadExcel() {
-    const selectedModule = document.getElementById("module").value;
+    const selectedModule = currentModule();
     const writingMode = document.getElementById("writingMode").value;
     const text = document.getElementById("textInput").value;
     const level = document.getElementById("level").value;
@@ -1968,7 +1990,7 @@ async function downloadExcel() {
         return;
     }
 
-    if (selectedModule === "text_multi" || selectedModule === "write_product_multi") {
+    if (isMultiModule()) {
         const response = await fetch("/api/export/multi-excel", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
@@ -1992,7 +2014,7 @@ async function downloadExcel() {
 
         const a = document.createElement("a");
         a.href = url;
-        a.download = "scriptora_multitexto_v0_8.xlsx";
+        a.download = "scriptora_multitexto_v0_8_1.xlsx";
         document.body.appendChild(a);
         a.click();
 
@@ -2047,7 +2069,7 @@ async function downloadExcel() {
 
     const a = document.createElement("a");
     a.href = url;
-    a.download = "scriptora_resultados_v0_8.xlsx";
+    a.download = "scriptora_resultados_v0_8_1.xlsx";
     document.body.appendChild(a);
     a.click();
 
@@ -2055,7 +2077,7 @@ async function downloadExcel() {
     window.URL.revokeObjectURL(url);
 }
 
-updateModeHelp();
+handleModuleChange();
 </script>
 </body>
 </html>
@@ -2071,7 +2093,7 @@ def health():
     return {
         "status": "ok",
         "service": "Scriptora Suite",
-        "version": "0.8.0",
+        "version": "0.8.1",
         "timestamp": datetime.utcnow().isoformat()
     }
 
@@ -2082,7 +2104,7 @@ def analyze_text(request: TextAnalysisRequest):
 
     return {
         "module": "Scriptora T · Text Analysis",
-        "version": "0.8.0",
+        "version": "0.8.1",
         "language": request.language,
         "context": request.context,
         "level": request.level,
@@ -2110,7 +2132,7 @@ def evaluate_writing(request: WritingEvaluationRequest):
 
     return {
         "module": "Scriptora W · Writing Product Evaluation",
-        "version": "0.8.0",
+        "version": "0.8.1",
         "language": request.language,
         "level": request.level,
         "genre": request.genre,
@@ -2136,7 +2158,7 @@ def evaluate_writing_process(request: WritingProcessRequest):
 
     return {
         "module": "Scriptora W · Product + Process Evaluation",
-        "version": "0.8.0",
+        "version": "0.8.1",
         "language": request.language,
         "level": request.level,
         "genre": request.genre,
@@ -2156,7 +2178,7 @@ def multi_analyze(request: MultiTextRequest):
 
     return {
         "module": module_label,
-        "version": "0.8.0",
+        "version": "0.8.1",
         "total_texts": len(results),
         "language": request.language,
         "level": request.level,
@@ -2176,7 +2198,7 @@ def export_excel(request: ExcelExportRequest):
     resultados = {
         "analysis_id": analysis_id,
         "timestamp_utc": timestamp,
-        "scriptora_version": "0.8.0",
+        "scriptora_version": "0.8.1",
         "selected_module": selected_module,
         "language": request.language,
         "level": request.level,
@@ -2234,8 +2256,8 @@ def export_excel(request: ExcelExportRequest):
     metadatos = {
         "analysis_id": analysis_id,
         "timestamp_utc": timestamp,
-        "scriptora_version": "0.8.0",
-        "archivo_generado": "scriptora_resultados_v0_8.xlsx",
+        "scriptora_version": "0.8.1",
+        "archivo_generado": "scriptora_resultados_v0_8_1.xlsx",
         "hoja_resultados_vertical": "Resultados en formato vertical legible.",
         "hoja_matriz_analisis": "Resultados en formato horizontal para análisis estadístico.",
         "hoja_diccionario_variables": "Definiciones operativas de las variables incluidas.",
@@ -2251,7 +2273,7 @@ def export_excel(request: ExcelExportRequest):
 
     output = create_single_analysis_excel(excel_data)
 
-    filename = f"scriptora_resultados_v0_8_{analysis_id[:8]}.xlsx"
+    filename = f"scriptora_resultados_v0_8_1_{analysis_id[:8]}.xlsx"
 
     return StreamingResponse(
         output,
@@ -2272,8 +2294,8 @@ def export_multi_excel(request: MultiExcelExportRequest):
     metadata = {
         "analysis_id": analysis_id,
         "timestamp_utc": timestamp,
-        "scriptora_version": "0.8.0",
-        "archivo_generado": "scriptora_multitexto_v0_8.xlsx",
+        "scriptora_version": "0.8.1",
+        "archivo_generado": "scriptora_multitexto_v0_8_1.xlsx",
         "selected_module": request.selected_module,
         "language": request.language,
         "level": request.level,
@@ -2288,7 +2310,7 @@ def export_multi_excel(request: MultiExcelExportRequest):
 
     output = create_multi_analysis_excel(rows, metadata)
 
-    filename = f"scriptora_multitexto_v0_8_{analysis_id[:8]}.xlsx"
+    filename = f"scriptora_multitexto_v0_8_1_{analysis_id[:8]}.xlsx"
 
     return StreamingResponse(
         output,
@@ -2334,7 +2356,7 @@ def list_benchmarks():
                 "status": "prototype"
             },
             {
-                "benchmark_id": "ES_WRITE_EXPORT_EXCEL_V2",
+                "benchmark_id": "ES_WRITE_EXPORT_EXCEL_V3",
                 "module": "Scriptora Suite · Export",
                 "language": "es",
                 "status": "prototype"
