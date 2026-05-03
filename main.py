@@ -15,7 +15,7 @@ from openpyxl.utils import get_column_letter
 app = FastAPI(
     title="Scriptora Suite API",
     description="Plataforma integrada de analítica textual, evaluación escritural, regulación del proceso de escritura y exportación de resultados.",
-    version="0.7.0"
+    version="0.7.1"
 )
 
 
@@ -153,7 +153,7 @@ def detect_closure(text: str):
 
 
 # ============================================================
-# SCRIPTORA T: INTERPRETACIÓN TEXTUAL
+# SCRIPTORA T
 # ============================================================
 
 def interpret_text_metrics(word_count, avg_sentence_length, lexical_density, ttr):
@@ -191,7 +191,7 @@ def interpret_text_metrics(word_count, avg_sentence_length, lexical_density, ttr
 
 
 # ============================================================
-# SCRIPTORA W: PRODUCTO ESCRITO
+# SCRIPTORA W: PRODUCTO
 # ============================================================
 
 def score_writing_product(text, words, sentences, genre):
@@ -594,6 +594,30 @@ def flatten_dict(data, prefix=""):
 def build_variable_dictionary():
     return [
         {
+            "variable": "analysis_id",
+            "nombre_amigable": "ID del análisis",
+            "modulo": "Metadatos",
+            "dimension": "Identificación",
+            "descripcion": "Identificador único del análisis realizado.",
+            "como_se_calcula": "UUID generado automáticamente.",
+            "tipo_valor": "Texto",
+            "rango_esperado": "Variable",
+            "interpretacion_general": "Permite rastrear cada análisis.",
+            "observaciones": "Útil para bases con múltiples sujetos."
+        },
+        {
+            "variable": "timestamp_utc",
+            "nombre_amigable": "Fecha y hora UTC",
+            "modulo": "Metadatos",
+            "dimension": "Trazabilidad",
+            "descripcion": "Fecha y hora de generación del análisis.",
+            "como_se_calcula": "datetime.utcnow().isoformat()",
+            "tipo_valor": "Fecha/hora",
+            "rango_esperado": "Variable",
+            "interpretacion_general": "Permite ordenar cronológicamente los análisis.",
+            "observaciones": "Está en horario UTC."
+        },
+        {
             "variable": "word_count",
             "nombre_amigable": "Número de palabras",
             "modulo": "Scriptora T / Scriptora W Producto",
@@ -623,11 +647,11 @@ def build_variable_dictionary():
             "modulo": "Scriptora T / Scriptora W Producto",
             "dimension": "Estructura textual",
             "descripcion": "Cantidad de unidades oracionales detectadas.",
-            "como_se_calcula": "Segmentación por signos de cierre como punto, interrogación o exclamación.",
+            "como_se_calcula": "Segmentación por signos de cierre.",
             "tipo_valor": "Entero",
             "rango_esperado": "0 en adelante",
             "interpretacion_general": "Permite estimar organización básica y longitud oracional promedio.",
-            "observaciones": "La segmentación es preliminar y puede mejorar con NLP avanzado."
+            "observaciones": "La segmentación es preliminar."
         },
         {
             "variable": "paragraph_count",
@@ -635,11 +659,11 @@ def build_variable_dictionary():
             "modulo": "Scriptora W Producto",
             "dimension": "Organización",
             "descripcion": "Cantidad de párrafos separados por saltos de línea.",
-            "como_se_calcula": "Conteo de bloques de texto no vacíos separados por salto de línea.",
+            "como_se_calcula": "Conteo de bloques no vacíos separados por salto de línea.",
             "tipo_valor": "Entero",
             "rango_esperado": "0 en adelante",
             "interpretacion_general": "Más de un párrafo puede reflejar mayor organización discursiva.",
-            "observaciones": "En textos breves puede no ser esperable más de un párrafo."
+            "observaciones": "En textos breves puede no esperarse más de un párrafo."
         },
         {
             "variable": "avg_sentence_length",
@@ -650,8 +674,8 @@ def build_variable_dictionary():
             "como_se_calcula": "word_count / sentence_count",
             "tipo_valor": "Decimal",
             "rango_esperado": "0 en adelante",
-            "interpretacion_general": "Valores muy bajos sugieren estructuras simples; valores muy altos pueden aumentar la complejidad de procesamiento.",
-            "observaciones": "Debe interpretarse según edad, género y propósito comunicativo."
+            "interpretacion_general": "Valores muy bajos sugieren estructuras simples; valores muy altos pueden aumentar la complejidad.",
+            "observaciones": "Debe interpretarse según edad, género y tarea."
         },
         {
             "variable": "unique_words",
@@ -659,11 +683,11 @@ def build_variable_dictionary():
             "modulo": "Scriptora T / Scriptora W Producto",
             "dimension": "Diversidad léxica",
             "descripcion": "Cantidad de formas léxicas distintas presentes en el texto.",
-            "como_se_calcula": "Conteo de tokens únicos después de limpieza básica.",
+            "como_se_calcula": "Conteo de tokens únicos.",
             "tipo_valor": "Entero",
             "rango_esperado": "0 en adelante",
             "interpretacion_general": "Aporta información inicial sobre variedad léxica.",
-            "observaciones": "Depende fuertemente de la extensión del texto."
+            "observaciones": "Depende fuertemente de la extensión."
         },
         {
             "variable": "type_token_ratio",
@@ -687,43 +711,43 @@ def build_variable_dictionary():
             "tipo_valor": "Decimal",
             "rango_esperado": "0 a 1",
             "interpretacion_general": "Valores altos sugieren mayor concentración informativa.",
-            "observaciones": "Es una aproximación inicial; luego puede reemplazarse por análisis gramatical más fino."
+            "observaciones": "Es una aproximación inicial."
         },
         {
             "variable": "connector_count",
             "nombre_amigable": "Conectores detectados",
             "modulo": "Scriptora W Producto",
             "dimension": "Cohesión",
-            "descripcion": "Cantidad de conectores discursivos reconocidos en el texto.",
-            "como_se_calcula": "Búsqueda de una lista preliminar de conectores.",
+            "descripcion": "Cantidad de conectores discursivos reconocidos.",
+            "como_se_calcula": "Búsqueda en lista preliminar de conectores.",
             "tipo_valor": "Entero",
             "rango_esperado": "0 en adelante",
             "interpretacion_general": "Más conectores pueden indicar mayor articulación discursiva.",
-            "observaciones": "No evalúa todavía la pertinencia semántica del conector."
+            "observaciones": "No evalúa pertinencia semántica."
         },
         {
             "variable": "connectors_found",
             "nombre_amigable": "Conectores encontrados",
             "modulo": "Scriptora W Producto",
             "dimension": "Cohesión",
-            "descripcion": "Lista de conectores identificados en el texto.",
-            "como_se_calcula": "Coincidencia con lista preliminar de conectores.",
+            "descripcion": "Lista de conectores identificados.",
+            "como_se_calcula": "Coincidencia con lista preliminar.",
             "tipo_valor": "Texto",
-            "rango_esperado": "Lista variable",
-            "interpretacion_general": "Permite observar qué recursos cohesivos aparecen.",
-            "observaciones": "No distingue aún función ni calidad de uso."
+            "rango_esperado": "Variable",
+            "interpretacion_general": "Permite observar recursos cohesivos usados.",
+            "observaciones": "No distingue función ni calidad de uso."
         },
         {
             "variable": "punctuation_count",
             "nombre_amigable": "Marcas de puntuación",
             "modulo": "Scriptora W Producto",
             "dimension": "Control formal",
-            "descripcion": "Cantidad de signos de puntuación básicos presentes en el texto.",
+            "descripcion": "Cantidad de signos de puntuación básicos.",
             "como_se_calcula": "Conteo de puntos, comas, dos puntos, punto y coma, signos de interrogación y exclamación.",
             "tipo_valor": "Entero",
             "rango_esperado": "0 en adelante",
-            "interpretacion_general": "Puede reflejar control básico de segmentación y organización formal.",
-            "observaciones": "No implica por sí solo uso correcto de la puntuación."
+            "interpretacion_general": "Puede reflejar control básico de segmentación.",
+            "observaciones": "No implica uso correcto por sí solo."
         },
         {
             "variable": "closure_present",
@@ -731,35 +755,35 @@ def build_variable_dictionary():
             "modulo": "Scriptora W Producto",
             "dimension": "Organización discursiva",
             "descripcion": "Indica si el texto contiene marcas explícitas de cierre.",
-            "como_se_calcula": "Detección de expresiones como 'en conclusión', 'finalmente' o equivalentes.",
+            "como_se_calcula": "Detección de expresiones de cierre.",
             "tipo_valor": "Booleano",
             "rango_esperado": "True / False",
-            "interpretacion_general": "La presencia de cierre puede reflejar mayor completitud textual.",
-            "observaciones": "No todo texto requiere un cierre explícito."
+            "interpretacion_general": "La presencia de cierre puede reflejar completitud textual.",
+            "observaciones": "No todo género requiere cierre explícito."
         },
         {
             "variable": "scores_extension",
             "nombre_amigable": "Puntaje de extensión",
             "modulo": "Scriptora W Producto",
             "dimension": "Extensión",
-            "descripcion": "Puntaje preliminar asociado al desarrollo cuantitativo del texto.",
-            "como_se_calcula": "Escalamiento del número de palabras respecto de un umbral de referencia.",
+            "descripcion": "Puntaje preliminar asociado al desarrollo cuantitativo.",
+            "como_se_calcula": "Escalamiento por número de palabras.",
             "tipo_valor": "Decimal",
             "rango_esperado": "0 a 100",
             "interpretacion_general": "Valores más altos indican mayor extensión relativa.",
-            "observaciones": "No debe interpretarse como calidad por sí solo."
+            "observaciones": "No equivale a calidad."
         },
         {
             "variable": "scores_organization",
             "nombre_amigable": "Puntaje de organización",
             "modulo": "Scriptora W Producto",
             "dimension": "Organización",
-            "descripcion": "Puntaje preliminar asociado a la estructuración del texto.",
-            "como_se_calcula": "Reglas basadas en cantidad de párrafos y extensión.",
+            "descripcion": "Puntaje preliminar asociado a estructura textual.",
+            "como_se_calcula": "Reglas basadas en párrafos y extensión.",
             "tipo_valor": "Decimal",
             "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores más altos sugieren mayor organización superficial.",
-            "observaciones": "Debe complementarse con análisis discursivo más fino."
+            "interpretacion_general": "Valores más altos sugieren mejor organización superficial.",
+            "observaciones": "Debe complementarse con análisis discursivo."
         },
         {
             "variable": "scores_cohesion",
@@ -771,19 +795,19 @@ def build_variable_dictionary():
             "tipo_valor": "Decimal",
             "rango_esperado": "0 a 100",
             "interpretacion_general": "Valores más altos sugieren mayor articulación conectiva.",
-            "observaciones": "No evalúa aún calidad semántica de las relaciones."
+            "observaciones": "No evalúa calidad semántica de las relaciones."
         },
         {
             "variable": "scores_syntax_control",
             "nombre_amigable": "Puntaje de control sintáctico",
             "modulo": "Scriptora W Producto",
             "dimension": "Sintaxis",
-            "descripcion": "Puntaje preliminar asociado a la longitud oracional promedio.",
-            "como_se_calcula": "Reglas basadas en rangos de avg_sentence_length.",
+            "descripcion": "Puntaje preliminar asociado a la longitud oracional.",
+            "como_se_calcula": "Reglas basadas en avg_sentence_length.",
             "tipo_valor": "Decimal",
             "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores intermedios suelen indicar control sintáctico funcional.",
-            "observaciones": "No analiza todavía errores sintácticos."
+            "interpretacion_general": "Valores intermedios suelen indicar control funcional.",
+            "observaciones": "No analiza errores sintácticos."
         },
         {
             "variable": "scores_lexical_variety",
@@ -794,7 +818,7 @@ def build_variable_dictionary():
             "como_se_calcula": "Reglas basadas en TTR.",
             "tipo_valor": "Decimal",
             "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores más altos sugieren mayor variedad léxica superficial.",
+            "interpretacion_general": "Valores altos sugieren mayor variedad superficial.",
             "observaciones": "Muy sensible a textos breves."
         },
         {
@@ -806,32 +830,32 @@ def build_variable_dictionary():
             "como_se_calcula": "Reglas basadas en lexical_density_proxy.",
             "tipo_valor": "Decimal",
             "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores altos sugieren mayor concentración de información.",
-            "observaciones": "Debe equilibrarse con claridad y desarrollo."
+            "interpretacion_general": "Valores altos sugieren mayor concentración informativa.",
+            "observaciones": "Debe equilibrarse con claridad."
         },
         {
             "variable": "scores_idea_elaboration",
             "nombre_amigable": "Puntaje de elaboración de ideas",
             "modulo": "Scriptora W Producto",
             "dimension": "Elaboración",
-            "descripcion": "Puntaje preliminar sobre desarrollo de contenido.",
+            "descripcion": "Puntaje preliminar sobre desarrollo del contenido.",
             "como_se_calcula": "Reglas basadas en extensión y número de oraciones.",
             "tipo_valor": "Decimal",
             "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores más altos sugieren mayor desarrollo discursivo.",
-            "observaciones": "No evalúa todavía profundidad semántica real."
+            "interpretacion_general": "Valores más altos sugieren mayor desarrollo.",
+            "observaciones": "No evalúa profundidad semántica real."
         },
         {
             "variable": "scores_global_coherence",
             "nombre_amigable": "Puntaje de coherencia global",
             "modulo": "Scriptora W Producto",
             "dimension": "Coherencia",
-            "descripcion": "Puntaje preliminar de organización global del texto.",
-            "como_se_calcula": "Reglas basadas en conectores y estructura de párrafos.",
+            "descripcion": "Puntaje preliminar de organización global.",
+            "como_se_calcula": "Reglas basadas en conectores y párrafos.",
             "tipo_valor": "Decimal",
             "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores más altos sugieren mejor articulación global.",
-            "observaciones": "Debe complementarse con medidas semánticas TRUNAJOD."
+            "interpretacion_general": "Valores altos sugieren mejor articulación global.",
+            "observaciones": "Debe complementarse con medidas semánticas."
         },
         {
             "variable": "scores_punctuation_control",
@@ -839,10 +863,10 @@ def build_variable_dictionary():
             "modulo": "Scriptora W Producto",
             "dimension": "Control formal",
             "descripcion": "Puntaje preliminar asociado al uso de puntuación.",
-            "como_se_calcula": "Reglas basadas en cantidad de marcas de puntuación.",
+            "como_se_calcula": "Reglas basadas en punctuation_count.",
             "tipo_valor": "Decimal",
             "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores más altos pueden indicar mayor segmentación formal.",
+            "interpretacion_general": "Valores altos pueden indicar segmentación formal.",
             "observaciones": "No evalúa corrección normativa."
         },
         {
@@ -850,12 +874,12 @@ def build_variable_dictionary():
             "nombre_amigable": "Puntaje de adecuación al género",
             "modulo": "Scriptora W Producto",
             "dimension": "Adecuación discursiva",
-            "descripcion": "Puntaje preliminar sobre ajuste del texto al género seleccionado.",
-            "como_se_calcula": "Detección de marcadores asociados a géneros narrativo, argumentativo o expositivo.",
+            "descripcion": "Puntaje preliminar sobre ajuste al género seleccionado.",
+            "como_se_calcula": "Detección de marcadores asociados a géneros.",
             "tipo_valor": "Decimal",
             "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores más altos sugieren mayor presencia de recursos esperables para el género.",
-            "observaciones": "Debe calibrarse con tareas y rúbricas reales."
+            "interpretacion_general": "Valores altos sugieren presencia de recursos esperables.",
+            "observaciones": "Debe calibrarse con tareas reales."
         },
         {
             "variable": "scores_textual_closure",
@@ -866,7 +890,7 @@ def build_variable_dictionary():
             "como_se_calcula": "Reglas basadas en closure_present.",
             "tipo_valor": "Decimal",
             "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores altos indican presencia de marcas de cierre.",
+            "interpretacion_general": "Valores altos indican presencia de cierre.",
             "observaciones": "No todo género requiere cierre explícito."
         },
         {
@@ -875,11 +899,11 @@ def build_variable_dictionary():
             "modulo": "Scriptora W Producto",
             "dimension": "Desempeño escritural",
             "descripcion": "Índice sintético de calidad preliminar del texto final.",
-            "como_se_calcula": "Combinación ponderada de extensión, organización, cohesión, sintaxis, léxico, densidad, elaboración, coherencia, género y cierre.",
+            "como_se_calcula": "Combinación ponderada de variables de producto.",
             "tipo_valor": "Decimal",
             "rango_esperado": "0 a 100",
             "interpretacion_general": "Valores más altos sugieren mejor desempeño escritural preliminar.",
-            "observaciones": "Debe calibrarse con rúbricas humanas y corpus reales."
+            "observaciones": "Debe calibrarse con rúbricas humanas."
         },
         {
             "variable": "level_label",
@@ -887,22 +911,22 @@ def build_variable_dictionary():
             "modulo": "Scriptora W Producto",
             "dimension": "Desempeño escritural",
             "descripcion": "Categoría interpretativa del producto escrito.",
-            "como_se_calcula": "Clasificación del puntaje global en rangos: Inicial, En desarrollo, Adecuado, Avanzado.",
+            "como_se_calcula": "Clasificación del puntaje global en rangos.",
             "tipo_valor": "Texto",
             "rango_esperado": "Inicial / En desarrollo / Adecuado / Avanzado",
             "interpretacion_general": "Resume el desempeño escritural preliminar.",
-            "observaciones": "Los puntos de corte son prototípicos y deben validarse."
+            "observaciones": "Los puntos de corte son prototípicos."
         },
         {
             "variable": "total_time_seconds",
             "nombre_amigable": "Tiempo total de escritura",
             "modulo": "Scriptora W Proceso",
             "dimension": "Tiempo de producción",
-            "descripcion": "Duración total registrada desde el inicio de la sesión hasta el análisis.",
-            "como_se_calcula": "Diferencia entre inicio de captura y momento de análisis.",
+            "descripcion": "Duración total registrada desde el inicio hasta el análisis.",
+            "como_se_calcula": "Diferencia entre inicio de captura y análisis.",
             "tipo_valor": "Decimal",
             "rango_esperado": "0 en adelante",
-            "interpretacion_general": "Permite contextualizar fluidez, revisión y ritmo escritural.",
+            "interpretacion_general": "Permite contextualizar fluidez y revisión.",
             "observaciones": "Solo es válido si el texto fue escrito en vivo."
         },
         {
@@ -911,11 +935,11 @@ def build_variable_dictionary():
             "modulo": "Scriptora W Proceso",
             "dimension": "Planificación",
             "descripcion": "Tiempo transcurrido antes del primer evento de escritura.",
-            "como_se_calcula": "Tiempo entre foco/inicio de sesión y primera entrada de texto.",
+            "como_se_calcula": "Tiempo entre inicio de sesión y primera entrada.",
             "tipo_valor": "Decimal",
             "rango_esperado": "0 en adelante",
-            "interpretacion_general": "Una latencia mayor puede sugerir planificación previa.",
-            "observaciones": "Debe interpretarse con cautela, porque también puede deberse a distracción."
+            "interpretacion_general": "Puede sugerir planificación previa.",
+            "observaciones": "También puede deberse a distracción."
         },
         {
             "variable": "long_pause_count",
@@ -927,7 +951,7 @@ def build_variable_dictionary():
             "tipo_valor": "Entero",
             "rango_esperado": "0 en adelante",
             "interpretacion_general": "Puede sugerir planificación, monitoreo o revisión.",
-            "observaciones": "No toda pausa implica regulación; requiere interpretación contextual."
+            "observaciones": "No toda pausa implica regulación."
         },
         {
             "variable": "edit_count",
@@ -939,7 +963,7 @@ def build_variable_dictionary():
             "tipo_valor": "Entero",
             "rango_esperado": "0 en adelante",
             "interpretacion_general": "Puede reflejar actividad de escritura y revisión.",
-            "observaciones": "En esta versión aún puede capturar microeventos."
+            "observaciones": "Todavía puede capturar microeventos."
         },
         {
             "variable": "insertion_count",
@@ -947,11 +971,11 @@ def build_variable_dictionary():
             "modulo": "Scriptora W Proceso",
             "dimension": "Producción",
             "descripcion": "Cantidad estimada de caracteres agregados.",
-            "como_se_calcula": "Suma de diferencias positivas entre estados consecutivos del texto.",
+            "como_se_calcula": "Suma de diferencias positivas entre estados consecutivos.",
             "tipo_valor": "Entero",
             "rango_esperado": "0 en adelante",
             "interpretacion_general": "Refleja crecimiento bruto del texto.",
-            "observaciones": "Puede ser mayor que la longitud final si hubo borrados."
+            "observaciones": "Puede superar la longitud final si hubo borrados."
         },
         {
             "variable": "deletion_count",
@@ -959,11 +983,11 @@ def build_variable_dictionary():
             "modulo": "Scriptora W Proceso",
             "dimension": "Revisión",
             "descripcion": "Cantidad estimada de caracteres eliminados.",
-            "como_se_calcula": "Suma de diferencias negativas entre estados consecutivos del texto.",
+            "como_se_calcula": "Suma de diferencias negativas entre estados consecutivos.",
             "tipo_valor": "Entero",
             "rango_esperado": "0 en adelante",
             "interpretacion_general": "Puede sugerir corrección o revisión.",
-            "observaciones": "No distingue aún borrado mecánico de revisión profunda."
+            "observaciones": "No distingue borrado mecánico de revisión profunda."
         },
         {
             "variable": "local_adjustment_count",
@@ -971,11 +995,11 @@ def build_variable_dictionary():
             "modulo": "Scriptora W Proceso",
             "dimension": "Revisión microtextual",
             "descripcion": "Cambios pequeños dentro del texto.",
-            "como_se_calcula": "Conteo de modificaciones de baja magnitud en caracteres.",
+            "como_se_calcula": "Conteo de modificaciones de baja magnitud.",
             "tipo_valor": "Entero",
             "rango_esperado": "0 en adelante",
-            "interpretacion_general": "Puede reflejar corrección ortográfica, léxica o gramatical local.",
-            "observaciones": "En esta versión se estima de manera preliminar."
+            "interpretacion_general": "Puede reflejar corrección local.",
+            "observaciones": "Estimación preliminar."
         },
         {
             "variable": "reformulation_count",
@@ -983,11 +1007,11 @@ def build_variable_dictionary():
             "modulo": "Scriptora W Proceso",
             "dimension": "Revisión profunda",
             "descripcion": "Cambios de mayor magnitud en el texto.",
-            "como_se_calcula": "Detección de inserciones o borrados superiores a un umbral de caracteres.",
+            "como_se_calcula": "Detección de inserciones o borrados superiores a umbral.",
             "tipo_valor": "Entero",
             "rango_esperado": "0 en adelante",
-            "interpretacion_general": "Puede sugerir modificación de ideas, frases o segmentos completos.",
-            "observaciones": "Debe refinarse con análisis de diferencias textuales más avanzado."
+            "interpretacion_general": "Puede sugerir modificación de ideas o frases completas.",
+            "observaciones": "Debe refinarse con comparación textual avanzada."
         },
         {
             "variable": "expansion_count",
@@ -995,11 +1019,11 @@ def build_variable_dictionary():
             "modulo": "Scriptora W Proceso",
             "dimension": "Desarrollo",
             "descripcion": "Eventos en que el texto aumenta su longitud.",
-            "como_se_calcula": "Conteo de diferencias positivas entre estados consecutivos.",
+            "como_se_calcula": "Conteo de diferencias positivas.",
             "tipo_valor": "Entero",
             "rango_esperado": "0 en adelante",
             "interpretacion_general": "Puede reflejar avance y desarrollo textual.",
-            "observaciones": "No todas las expansiones implican elaboración conceptual."
+            "observaciones": "No toda expansión implica elaboración conceptual."
         },
         {
             "variable": "reduction_count",
@@ -1007,23 +1031,23 @@ def build_variable_dictionary():
             "modulo": "Scriptora W Proceso",
             "dimension": "Revisión",
             "descripcion": "Eventos en que el texto disminuye su longitud.",
-            "como_se_calcula": "Conteo de diferencias negativas entre estados consecutivos.",
+            "como_se_calcula": "Conteo de diferencias negativas.",
             "tipo_valor": "Entero",
             "rango_esperado": "0 en adelante",
             "interpretacion_general": "Puede sugerir corrección, eliminación o reestructuración.",
-            "observaciones": "Debe interpretarse junto con reformulaciones y borrados."
+            "observaciones": "Debe interpretarse junto con reformulaciones."
         },
         {
             "variable": "macro_adjustment_count",
             "nombre_amigable": "Ajustes macrotextuales",
             "modulo": "Scriptora W Proceso",
             "dimension": "Recursividad",
-            "descripcion": "Cambios que sugieren reorganización global del texto.",
-            "como_se_calcula": "Cambios en la estructura de párrafos durante la escritura.",
+            "descripcion": "Cambios que sugieren reorganización global.",
+            "como_se_calcula": "Cambios en estructura de párrafos.",
             "tipo_valor": "Entero",
             "rango_esperado": "0 en adelante",
-            "interpretacion_general": "Puede indicar reorganización discursiva o revisión estructural.",
-            "observaciones": "Indicador preliminar basado en saltos de línea y cambios de párrafo."
+            "interpretacion_general": "Puede indicar reorganización discursiva.",
+            "observaciones": "Indicador preliminar."
         },
         {
             "variable": "words_per_minute",
@@ -1035,7 +1059,7 @@ def build_variable_dictionary():
             "tipo_valor": "Decimal",
             "rango_esperado": "0 en adelante",
             "interpretacion_general": "Permite estimar ritmo de escritura.",
-            "observaciones": "Debe interpretarse junto con calidad del producto y revisión."
+            "observaciones": "Debe interpretarse junto con calidad y revisión."
         },
         {
             "variable": "final_stability_ratio",
@@ -1046,7 +1070,7 @@ def build_variable_dictionary():
             "como_se_calcula": "final_text_length / max_text_length",
             "tipo_valor": "Decimal",
             "rango_esperado": "0 a 1",
-            "interpretacion_general": "Valores cercanos a 1 indican que el texto final conserva gran parte de lo producido.",
+            "interpretacion_general": "Valores cercanos a 1 indican conservación de lo producido.",
             "observaciones": "Valores bajos pueden indicar reducción o reestructuración."
         },
         {
@@ -1054,23 +1078,23 @@ def build_variable_dictionary():
             "nombre_amigable": "Puntaje de planificación",
             "modulo": "Scriptora W Proceso",
             "dimension": "Planificación",
-            "descripcion": "Puntaje preliminar asociado a latencia inicial.",
+            "descripcion": "Puntaje asociado a latencia inicial.",
             "como_se_calcula": "Reglas basadas en initial_latency_seconds.",
             "tipo_valor": "Decimal",
             "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores mayores pueden sugerir mayor planificación previa.",
-            "observaciones": "La latencia también puede deberse a distracciones."
+            "interpretacion_general": "Valores mayores pueden sugerir planificación.",
+            "observaciones": "La latencia puede tener otras causas."
         },
         {
             "variable": "monitoring_score",
             "nombre_amigable": "Puntaje de monitoreo",
             "modulo": "Scriptora W Proceso",
             "dimension": "Monitoreo",
-            "descripcion": "Puntaje preliminar asociado a pausas largas.",
+            "descripcion": "Puntaje asociado a pausas largas.",
             "como_se_calcula": "Reglas basadas en long_pause_count.",
             "tipo_valor": "Decimal",
             "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores mayores pueden sugerir mayor monitoreo reflexivo.",
+            "interpretacion_general": "Valores mayores pueden sugerir monitoreo.",
             "observaciones": "No toda pausa implica monitoreo."
         },
         {
@@ -1078,35 +1102,35 @@ def build_variable_dictionary():
             "nombre_amigable": "Puntaje de revisión",
             "modulo": "Scriptora W Proceso",
             "dimension": "Revisión",
-            "descripcion": "Puntaje preliminar asociado a borrados, reducciones y ajustes locales.",
+            "descripcion": "Puntaje asociado a borrados, reducciones y ajustes.",
             "como_se_calcula": "Reglas basadas en deletion_count, reduction_count y local_adjustment_count.",
             "tipo_valor": "Decimal",
             "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores mayores sugieren mayor actividad revisora.",
-            "observaciones": "Debe distinguirse luego entre corrección mecánica y revisión profunda."
+            "interpretacion_general": "Valores mayores sugieren actividad revisora.",
+            "observaciones": "Debe distinguirse corrección mecánica y revisión profunda."
         },
         {
             "variable": "reformulation_score",
             "nombre_amigable": "Puntaje de reformulación",
             "modulo": "Scriptora W Proceso",
             "dimension": "Reformulación",
-            "descripcion": "Puntaje asociado a cambios amplios en el texto.",
+            "descripcion": "Puntaje asociado a cambios amplios.",
             "como_se_calcula": "Reglas basadas en reformulation_count.",
             "tipo_valor": "Decimal",
             "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores mayores pueden sugerir reestructuración de frases o ideas.",
-            "observaciones": "Requiere futura validación semántica."
+            "interpretacion_general": "Valores mayores pueden sugerir reestructuración.",
+            "observaciones": "Requiere validación semántica."
         },
         {
             "variable": "fluency_score",
             "nombre_amigable": "Puntaje de fluidez escritural",
             "modulo": "Scriptora W Proceso",
             "dimension": "Fluidez",
-            "descripcion": "Puntaje preliminar asociado al ritmo de producción.",
+            "descripcion": "Puntaje asociado al ritmo de producción.",
             "como_se_calcula": "Reglas basadas en words_per_minute.",
             "tipo_valor": "Decimal",
             "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores funcionales sugieren ritmo adecuado de escritura.",
+            "interpretacion_general": "Valores funcionales sugieren ritmo adecuado.",
             "observaciones": "Velocidad alta no siempre implica mejor escritura."
         },
         {
@@ -1118,8 +1142,8 @@ def build_variable_dictionary():
             "como_se_calcula": "Reglas basadas en macro_adjustment_count.",
             "tipo_valor": "Decimal",
             "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores mayores pueden sugerir reorganización del texto durante el proceso.",
-            "observaciones": "Es una estimación preliminar."
+            "interpretacion_general": "Valores mayores pueden sugerir reorganización.",
+            "observaciones": "Estimación preliminar."
         },
         {
             "variable": "process_regulation_score",
@@ -1130,7 +1154,7 @@ def build_variable_dictionary():
             "como_se_calcula": "Combinación ponderada de planificación, monitoreo, revisión, reformulación, fluidez y recursividad.",
             "tipo_valor": "Decimal",
             "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores más altos sugieren mayor regulación escritural observable.",
+            "interpretacion_general": "Valores más altos sugieren mayor regulación observable.",
             "observaciones": "Solo debe interpretarse si el proceso fue trazable."
         },
         {
@@ -1139,11 +1163,11 @@ def build_variable_dictionary():
             "modulo": "Scriptora W Proceso",
             "dimension": "Regulación escritural",
             "descripcion": "Categoría interpretativa del proceso escritural.",
-            "como_se_calcula": "Clasificación del process_regulation_score en rangos.",
+            "como_se_calcula": "Clasificación del process_regulation_score.",
             "tipo_valor": "Texto",
             "rango_esperado": "No trazable / Regulación baja / Regulación emergente / Regulación media / Regulación alta",
             "interpretacion_general": "Resume la regulación escritural observable.",
-            "observaciones": "Debe calibrarse con datos empíricos."
+            "observaciones": "Debe calibrarse empíricamente."
         },
         {
             "variable": "integrated_interpretation",
@@ -1151,10 +1175,10 @@ def build_variable_dictionary():
             "modulo": "Scriptora W Producto + Proceso",
             "dimension": "Interpretación integrada",
             "descripcion": "Interpretación que relaciona producto escrito y proceso escritural.",
-            "como_se_calcula": "Reglas interpretativas basadas en puntaje del producto y puntaje del proceso.",
+            "como_se_calcula": "Reglas interpretativas basadas en producto y proceso.",
             "tipo_valor": "Texto",
             "rango_esperado": "Texto interpretativo",
-            "interpretacion_general": "Permite observar convergencias o tensiones entre calidad textual y regulación.",
+            "interpretacion_general": "Permite observar convergencias o tensiones.",
             "observaciones": "Es exploratoria y requiere validación."
         },
         {
@@ -1163,10 +1187,10 @@ def build_variable_dictionary():
             "modulo": "Todos",
             "dimension": "Entrada",
             "descripcion": "Texto ingresado por el usuario.",
-            "como_se_calcula": "Se conserva el texto enviado al sistema.",
+            "como_se_calcula": "Se conserva el texto enviado.",
             "tipo_valor": "Texto",
             "rango_esperado": "Variable",
-            "interpretacion_general": "Permite revisar manualmente el insumo analizado.",
+            "interpretacion_general": "Permite revisar manualmente el insumo.",
             "observaciones": "Debe manejarse con cuidado si contiene información sensible."
         }
     ]
@@ -1181,7 +1205,7 @@ def autosize_columns(ws):
             value_length = len(str(cell.value)) if cell.value is not None else 0
             max_length = max(max_length, value_length)
 
-        adjusted_width = min(max(max_length + 2, 12), 55)
+        adjusted_width = min(max(max_length + 2, 12), 60)
         ws.column_dimensions[column_letter].width = adjusted_width
 
 
@@ -1206,20 +1230,81 @@ def style_sheet(ws):
     autosize_columns(ws)
 
 
+def build_results_vertical_rows(flat_results):
+    dictionary_rows = build_variable_dictionary()
+    dictionary_map = {row["variable"]: row for row in dictionary_rows}
+
+    rows = []
+
+    for variable, value in flat_results.items():
+        clean_variable = variable
+
+        if clean_variable.startswith("product_"):
+            clean_variable = clean_variable.replace("product_", "", 1)
+
+        if clean_variable.startswith("process_"):
+            clean_variable = clean_variable.replace("process_", "", 1)
+
+        dict_info = dictionary_map.get(clean_variable, {})
+
+        rows.append({
+            "variable": variable,
+            "valor": safe_value(value),
+            "nombre_amigable": dict_info.get("nombre_amigable", ""),
+            "modulo": dict_info.get("modulo", ""),
+            "dimension": dict_info.get("dimension", ""),
+            "descripcion": dict_info.get("descripcion", "")
+        })
+
+    return rows
+
+
 def create_scriptora_excel(export_data):
     wb = Workbook()
 
+    flat_results = flatten_dict(export_data["resultados"])
+
+    # Hoja 1: resultados verticales, legibles
     ws_results = wb.active
     ws_results.title = "resultados"
 
-    flat_results = flatten_dict(export_data["resultados"])
-    headers = list(flat_results.keys())
-    values = [safe_value(flat_results[h]) for h in headers]
+    vertical_headers = [
+        "variable",
+        "valor",
+        "nombre_amigable",
+        "modulo",
+        "dimension",
+        "descripcion"
+    ]
 
-    ws_results.append(headers)
-    ws_results.append(values)
+    ws_results.append(vertical_headers)
+
+    vertical_rows = build_results_vertical_rows(flat_results)
+
+    for row in vertical_rows:
+        ws_results.append([
+            row.get("variable", ""),
+            row.get("valor", ""),
+            row.get("nombre_amigable", ""),
+            row.get("modulo", ""),
+            row.get("dimension", ""),
+            row.get("descripcion", "")
+        ])
+
     style_sheet(ws_results)
 
+    # Hoja 2: matriz horizontal para análisis estadístico
+    ws_matrix = wb.create_sheet("matriz_analisis")
+
+    matrix_headers = list(flat_results.keys())
+    matrix_values = [safe_value(flat_results[h]) for h in matrix_headers]
+
+    ws_matrix.append(matrix_headers)
+    ws_matrix.append(matrix_values)
+
+    style_sheet(ws_matrix)
+
+    # Hoja 3: diccionario de variables
     ws_dict = wb.create_sheet("diccionario_variables")
     dictionary_rows = build_variable_dictionary()
 
@@ -1243,6 +1328,7 @@ def create_scriptora_excel(export_data):
 
     style_sheet(ws_dict)
 
+    # Hoja 4: metadatos
     ws_meta = wb.create_sheet("metadatos")
     ws_meta.append(["campo", "valor"])
 
@@ -1384,7 +1470,7 @@ def home():
 <body>
 <div class="container">
     <h1>Scriptora Suite</h1>
-    <div class="subtitle">Analítica textual, evaluación escritural, regulación del proceso y exportación Excel · v0.7</div>
+    <div class="subtitle">Analítica textual, evaluación escritural, regulación del proceso y exportación Excel · v0.7.1</div>
 
     <label>Módulo de análisis</label>
     <select id="module">
@@ -1957,7 +2043,7 @@ def health():
     return {
         "status": "ok",
         "service": "Scriptora Suite",
-        "version": "0.7.0",
+        "version": "0.7.1",
         "timestamp": datetime.utcnow().isoformat()
     }
 
@@ -1986,7 +2072,7 @@ def analyze_text(request: TextAnalysisRequest):
 
     return {
         "module": "Scriptora T · Text Analysis",
-        "version": "0.7.0",
+        "version": "0.7.1",
         "language": request.language,
         "context": request.context,
         "level": request.level,
@@ -2020,7 +2106,7 @@ def evaluate_writing(request: WritingEvaluationRequest):
 
     return {
         "module": "Scriptora W · Writing Product Evaluation",
-        "version": "0.7.0",
+        "version": "0.7.1",
         "language": request.language,
         "level": request.level,
         "genre": request.genre,
@@ -2052,7 +2138,7 @@ def evaluate_writing_process(request: WritingProcessRequest):
 
     return {
         "module": "Scriptora W · Product + Process Evaluation",
-        "version": "0.7.0",
+        "version": "0.7.1",
         "language": request.language,
         "level": request.level,
         "genre": request.genre,
@@ -2078,7 +2164,7 @@ def export_excel(request: ExcelExportRequest):
     resultados = {
         "analysis_id": analysis_id,
         "timestamp_utc": timestamp,
-        "scriptora_version": "0.7.0",
+        "scriptora_version": "0.7.1",
         "selected_module": selected_module,
         "language": request.language,
         "level": request.level,
@@ -2162,10 +2248,11 @@ def export_excel(request: ExcelExportRequest):
     metadatos = {
         "analysis_id": analysis_id,
         "timestamp_utc": timestamp,
-        "scriptora_version": "0.7.0",
+        "scriptora_version": "0.7.1",
         "archivo_generado": "scriptora_resultados.xlsx",
         "descripcion": "Archivo generado automáticamente por Scriptora Suite.",
-        "hoja_resultados": "Contiene los resultados del análisis textual, escritural o de proceso.",
+        "hoja_resultados": "Contiene los resultados en formato vertical legible.",
+        "hoja_matriz_analisis": "Contiene los mismos resultados en formato horizontal para análisis estadístico.",
         "hoja_diccionario_variables": "Contiene definiciones operativas de las variables incluidas.",
         "hoja_metadatos": "Contiene información general sobre el análisis y la versión.",
         "advertencia_metodologica": "Los resultados son preliminares y deben calibrarse con datos reales, rúbricas humanas y benchmarks contextuales.",
