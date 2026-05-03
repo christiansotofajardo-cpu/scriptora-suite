@@ -14,13 +14,13 @@ from openpyxl.utils import get_column_letter
 
 app = FastAPI(
     title="Scriptora Suite API",
-    description="Plataforma integrada de analítica textual, evaluación escritural, regulación del proceso de escritura y exportación de resultados.",
-    version="0.7.1"
+    description="Scriptora Suite: analítica textual, evaluación escritural, proceso de escritura, multitexto y exportación Excel.",
+    version="0.8.0"
 )
 
 
 # ============================================================
-# MODELOS DE ENTRADA
+# MODELOS
 # ============================================================
 
 class TextAnalysisRequest(BaseModel):
@@ -69,6 +69,19 @@ class WritingProcessRequest(BaseModel):
 
 class ExcelExportRequest(WritingProcessRequest):
     selected_module: str = "write_process"
+
+
+class MultiTextRequest(BaseModel):
+    raw_input: str
+    selected_module: str = "text_multi"
+    language: str = "es"
+    level: str | None = "general"
+    genre: str | None = "general"
+    purpose: str | None = "multitext_analysis"
+
+
+class MultiExcelExportRequest(MultiTextRequest):
+    pass
 
 
 # ============================================================
@@ -156,6 +169,38 @@ def detect_closure(text: str):
 # SCRIPTORA T
 # ============================================================
 
+def analyze_text_core(text: str):
+    text = text.strip()
+    words = tokenize_words(text)
+    sentences = split_sentences(text)
+
+    word_count = len(words)
+    char_count = len(text)
+    sentence_count = len(sentences)
+    unique_words = len(set(words))
+    avg_sentence_length = round(word_count / sentence_count, 2) if sentence_count > 0 else 0
+    ttr = round(unique_words / word_count, 3) if word_count > 0 else 0
+    lexical_density = estimate_lexical_density(words)
+
+    interpretation = interpret_text_metrics(
+        word_count,
+        avg_sentence_length,
+        lexical_density,
+        ttr
+    )
+
+    return {
+        "word_count": word_count,
+        "char_count": char_count,
+        "sentence_count": sentence_count,
+        "unique_words": unique_words,
+        "avg_sentence_length": avg_sentence_length,
+        "type_token_ratio": ttr,
+        "lexical_density_proxy": lexical_density,
+        "interpretation_text": interpretation
+    }
+
+
 def interpret_text_metrics(word_count, avg_sentence_length, lexical_density, ttr):
     comments = []
 
@@ -191,10 +236,14 @@ def interpret_text_metrics(word_count, avg_sentence_length, lexical_density, ttr
 
 
 # ============================================================
-# SCRIPTORA W: PRODUCTO
+# SCRIPTORA W PRODUCTO
 # ============================================================
 
-def score_writing_product(text, words, sentences, genre):
+def score_writing_product(text, words=None, sentences=None, genre="general"):
+    text = text.strip()
+    words = words if words is not None else tokenize_words(text)
+    sentences = sentences if sentences is not None else split_sentences(text)
+
     word_count = len(words)
     sentence_count = len(sentences)
     paragraph_count = estimate_paragraphs(text)
@@ -369,7 +418,7 @@ def score_writing_product(text, words, sentences, genre):
 
 
 # ============================================================
-# SCRIPTORA W: PROCESO / REGULACIÓN
+# SCRIPTORA W PROCESO
 # ============================================================
 
 def score_writing_process(request: WritingProcessRequest):
@@ -564,7 +613,79 @@ def integrated_writing_interpretation(product_metrics, process_metrics):
 
 
 # ============================================================
-# EXPORTACIÓN EXCEL
+# MULTITEXTO
+# ============================================================
+
+def parse_multitext_input(raw_input: str):
+    raw_input = raw_input.strip()
+    if not raw_input:
+        return []
+
+    pattern = r"###\s*ID:\s*(.+)"
+    matches = list(re.finditer(pattern, raw_input))
+
+    records = []
+
+    if not matches:
+        blocks = [b.strip() for b in raw_input.split("\n---\n") if b.strip()]
+        for idx, block in enumerate(blocks, start=1):
+            records.append({
+                "id": f"texto_{idx:03d}",
+                "text": block
+            })
+        return records
+
+    for i, match in enumerate(matches):
+        current_id = match.group(1).strip()
+        start = match.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(raw_input)
+        text_block = raw_input[start:end].strip()
+
+        if text_block:
+            records.append({
+                "id": current_id,
+                "text": text_block
+            })
+
+    return records
+
+
+def analyze_multitext(request: MultiTextRequest):
+    records = parse_multitext_input(request.raw_input)
+
+    results = []
+
+    for record in records:
+        item_id = record["id"]
+        text = record["text"]
+
+        base = {
+            "id": item_id,
+            "selected_module": request.selected_module,
+            "language": request.language,
+            "level": request.level,
+            "genre": request.genre,
+            "texto_original": text
+        }
+
+        if request.selected_module == "text_multi":
+            metrics = analyze_text_core(text)
+            base.update(metrics)
+            base["module"] = "Scriptora T Multitexto"
+
+        else:
+            product = score_writing_product(text=text, genre=request.genre or "general")
+            flat_product = flatten_dict(product)
+            base.update(flat_product)
+            base["module"] = "Scriptora W Producto Multitexto"
+
+        results.append(base)
+
+    return results
+
+
+# ============================================================
+# EXCEL
 # ============================================================
 
 def safe_value(value):
@@ -593,6 +714,18 @@ def flatten_dict(data, prefix=""):
 
 def build_variable_dictionary():
     return [
+        {
+            "variable": "id",
+            "nombre_amigable": "ID del texto",
+            "modulo": "Multitexto",
+            "dimension": "Identificación",
+            "descripcion": "Identificador del texto o sujeto analizado.",
+            "como_se_calcula": "Asignado por el usuario o generado automáticamente.",
+            "tipo_valor": "Texto",
+            "rango_esperado": "Variable",
+            "interpretacion_general": "Permite vincular resultados con sujetos, textos o registros.",
+            "observaciones": "Clave para análisis por corpus."
+        },
         {
             "variable": "analysis_id",
             "nombre_amigable": "ID del análisis",
@@ -674,7 +807,7 @@ def build_variable_dictionary():
             "como_se_calcula": "word_count / sentence_count",
             "tipo_valor": "Decimal",
             "rango_esperado": "0 en adelante",
-            "interpretacion_general": "Valores muy bajos sugieren estructuras simples; valores muy altos pueden aumentar la complejidad.",
+            "interpretacion_general": "Valores bajos sugieren estructuras simples; valores muy altos pueden aumentar la complejidad.",
             "observaciones": "Debe interpretarse según edad, género y tarea."
         },
         {
@@ -759,138 +892,6 @@ def build_variable_dictionary():
             "tipo_valor": "Booleano",
             "rango_esperado": "True / False",
             "interpretacion_general": "La presencia de cierre puede reflejar completitud textual.",
-            "observaciones": "No todo género requiere cierre explícito."
-        },
-        {
-            "variable": "scores_extension",
-            "nombre_amigable": "Puntaje de extensión",
-            "modulo": "Scriptora W Producto",
-            "dimension": "Extensión",
-            "descripcion": "Puntaje preliminar asociado al desarrollo cuantitativo.",
-            "como_se_calcula": "Escalamiento por número de palabras.",
-            "tipo_valor": "Decimal",
-            "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores más altos indican mayor extensión relativa.",
-            "observaciones": "No equivale a calidad."
-        },
-        {
-            "variable": "scores_organization",
-            "nombre_amigable": "Puntaje de organización",
-            "modulo": "Scriptora W Producto",
-            "dimension": "Organización",
-            "descripcion": "Puntaje preliminar asociado a estructura textual.",
-            "como_se_calcula": "Reglas basadas en párrafos y extensión.",
-            "tipo_valor": "Decimal",
-            "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores más altos sugieren mejor organización superficial.",
-            "observaciones": "Debe complementarse con análisis discursivo."
-        },
-        {
-            "variable": "scores_cohesion",
-            "nombre_amigable": "Puntaje de cohesión",
-            "modulo": "Scriptora W Producto",
-            "dimension": "Cohesión",
-            "descripcion": "Puntaje preliminar asociado al uso de conectores.",
-            "como_se_calcula": "Reglas basadas en connector_count.",
-            "tipo_valor": "Decimal",
-            "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores más altos sugieren mayor articulación conectiva.",
-            "observaciones": "No evalúa calidad semántica de las relaciones."
-        },
-        {
-            "variable": "scores_syntax_control",
-            "nombre_amigable": "Puntaje de control sintáctico",
-            "modulo": "Scriptora W Producto",
-            "dimension": "Sintaxis",
-            "descripcion": "Puntaje preliminar asociado a la longitud oracional.",
-            "como_se_calcula": "Reglas basadas en avg_sentence_length.",
-            "tipo_valor": "Decimal",
-            "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores intermedios suelen indicar control funcional.",
-            "observaciones": "No analiza errores sintácticos."
-        },
-        {
-            "variable": "scores_lexical_variety",
-            "nombre_amigable": "Puntaje de variedad léxica",
-            "modulo": "Scriptora W Producto",
-            "dimension": "Léxico",
-            "descripcion": "Puntaje preliminar asociado a diversidad léxica.",
-            "como_se_calcula": "Reglas basadas en TTR.",
-            "tipo_valor": "Decimal",
-            "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores altos sugieren mayor variedad superficial.",
-            "observaciones": "Muy sensible a textos breves."
-        },
-        {
-            "variable": "scores_informational_density",
-            "nombre_amigable": "Puntaje de densidad informativa",
-            "modulo": "Scriptora W Producto",
-            "dimension": "Densidad informativa",
-            "descripcion": "Puntaje asociado a la proporción de palabras de contenido.",
-            "como_se_calcula": "Reglas basadas en lexical_density_proxy.",
-            "tipo_valor": "Decimal",
-            "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores altos sugieren mayor concentración informativa.",
-            "observaciones": "Debe equilibrarse con claridad."
-        },
-        {
-            "variable": "scores_idea_elaboration",
-            "nombre_amigable": "Puntaje de elaboración de ideas",
-            "modulo": "Scriptora W Producto",
-            "dimension": "Elaboración",
-            "descripcion": "Puntaje preliminar sobre desarrollo del contenido.",
-            "como_se_calcula": "Reglas basadas en extensión y número de oraciones.",
-            "tipo_valor": "Decimal",
-            "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores más altos sugieren mayor desarrollo.",
-            "observaciones": "No evalúa profundidad semántica real."
-        },
-        {
-            "variable": "scores_global_coherence",
-            "nombre_amigable": "Puntaje de coherencia global",
-            "modulo": "Scriptora W Producto",
-            "dimension": "Coherencia",
-            "descripcion": "Puntaje preliminar de organización global.",
-            "como_se_calcula": "Reglas basadas en conectores y párrafos.",
-            "tipo_valor": "Decimal",
-            "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores altos sugieren mejor articulación global.",
-            "observaciones": "Debe complementarse con medidas semánticas."
-        },
-        {
-            "variable": "scores_punctuation_control",
-            "nombre_amigable": "Puntaje de puntuación",
-            "modulo": "Scriptora W Producto",
-            "dimension": "Control formal",
-            "descripcion": "Puntaje preliminar asociado al uso de puntuación.",
-            "como_se_calcula": "Reglas basadas en punctuation_count.",
-            "tipo_valor": "Decimal",
-            "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores altos pueden indicar segmentación formal.",
-            "observaciones": "No evalúa corrección normativa."
-        },
-        {
-            "variable": "scores_genre_adequacy",
-            "nombre_amigable": "Puntaje de adecuación al género",
-            "modulo": "Scriptora W Producto",
-            "dimension": "Adecuación discursiva",
-            "descripcion": "Puntaje preliminar sobre ajuste al género seleccionado.",
-            "como_se_calcula": "Detección de marcadores asociados a géneros.",
-            "tipo_valor": "Decimal",
-            "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores altos sugieren presencia de recursos esperables.",
-            "observaciones": "Debe calibrarse con tareas reales."
-        },
-        {
-            "variable": "scores_textual_closure",
-            "nombre_amigable": "Puntaje de cierre textual",
-            "modulo": "Scriptora W Producto",
-            "dimension": "Cierre",
-            "descripcion": "Puntaje asociado a la presencia de cierre explícito.",
-            "como_se_calcula": "Reglas basadas en closure_present.",
-            "tipo_valor": "Decimal",
-            "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores altos indican presencia de cierre.",
             "observaciones": "No todo género requiere cierre explícito."
         },
         {
@@ -988,162 +989,6 @@ def build_variable_dictionary():
             "rango_esperado": "0 en adelante",
             "interpretacion_general": "Puede sugerir corrección o revisión.",
             "observaciones": "No distingue borrado mecánico de revisión profunda."
-        },
-        {
-            "variable": "local_adjustment_count",
-            "nombre_amigable": "Ajustes locales",
-            "modulo": "Scriptora W Proceso",
-            "dimension": "Revisión microtextual",
-            "descripcion": "Cambios pequeños dentro del texto.",
-            "como_se_calcula": "Conteo de modificaciones de baja magnitud.",
-            "tipo_valor": "Entero",
-            "rango_esperado": "0 en adelante",
-            "interpretacion_general": "Puede reflejar corrección local.",
-            "observaciones": "Estimación preliminar."
-        },
-        {
-            "variable": "reformulation_count",
-            "nombre_amigable": "Reformulaciones",
-            "modulo": "Scriptora W Proceso",
-            "dimension": "Revisión profunda",
-            "descripcion": "Cambios de mayor magnitud en el texto.",
-            "como_se_calcula": "Detección de inserciones o borrados superiores a umbral.",
-            "tipo_valor": "Entero",
-            "rango_esperado": "0 en adelante",
-            "interpretacion_general": "Puede sugerir modificación de ideas o frases completas.",
-            "observaciones": "Debe refinarse con comparación textual avanzada."
-        },
-        {
-            "variable": "expansion_count",
-            "nombre_amigable": "Expansiones",
-            "modulo": "Scriptora W Proceso",
-            "dimension": "Desarrollo",
-            "descripcion": "Eventos en que el texto aumenta su longitud.",
-            "como_se_calcula": "Conteo de diferencias positivas.",
-            "tipo_valor": "Entero",
-            "rango_esperado": "0 en adelante",
-            "interpretacion_general": "Puede reflejar avance y desarrollo textual.",
-            "observaciones": "No toda expansión implica elaboración conceptual."
-        },
-        {
-            "variable": "reduction_count",
-            "nombre_amigable": "Reducciones",
-            "modulo": "Scriptora W Proceso",
-            "dimension": "Revisión",
-            "descripcion": "Eventos en que el texto disminuye su longitud.",
-            "como_se_calcula": "Conteo de diferencias negativas.",
-            "tipo_valor": "Entero",
-            "rango_esperado": "0 en adelante",
-            "interpretacion_general": "Puede sugerir corrección, eliminación o reestructuración.",
-            "observaciones": "Debe interpretarse junto con reformulaciones."
-        },
-        {
-            "variable": "macro_adjustment_count",
-            "nombre_amigable": "Ajustes macrotextuales",
-            "modulo": "Scriptora W Proceso",
-            "dimension": "Recursividad",
-            "descripcion": "Cambios que sugieren reorganización global.",
-            "como_se_calcula": "Cambios en estructura de párrafos.",
-            "tipo_valor": "Entero",
-            "rango_esperado": "0 en adelante",
-            "interpretacion_general": "Puede indicar reorganización discursiva.",
-            "observaciones": "Indicador preliminar."
-        },
-        {
-            "variable": "words_per_minute",
-            "nombre_amigable": "Palabras por minuto",
-            "modulo": "Scriptora W Proceso",
-            "dimension": "Fluidez escritural",
-            "descripcion": "Velocidad aproximada de producción escrita.",
-            "como_se_calcula": "(word_count / total_time_seconds) * 60",
-            "tipo_valor": "Decimal",
-            "rango_esperado": "0 en adelante",
-            "interpretacion_general": "Permite estimar ritmo de escritura.",
-            "observaciones": "Debe interpretarse junto con calidad y revisión."
-        },
-        {
-            "variable": "final_stability_ratio",
-            "nombre_amigable": "Estabilidad final",
-            "modulo": "Scriptora W Proceso",
-            "dimension": "Estabilidad textual",
-            "descripcion": "Relación entre longitud final y longitud máxima alcanzada.",
-            "como_se_calcula": "final_text_length / max_text_length",
-            "tipo_valor": "Decimal",
-            "rango_esperado": "0 a 1",
-            "interpretacion_general": "Valores cercanos a 1 indican conservación de lo producido.",
-            "observaciones": "Valores bajos pueden indicar reducción o reestructuración."
-        },
-        {
-            "variable": "planning_score",
-            "nombre_amigable": "Puntaje de planificación",
-            "modulo": "Scriptora W Proceso",
-            "dimension": "Planificación",
-            "descripcion": "Puntaje asociado a latencia inicial.",
-            "como_se_calcula": "Reglas basadas en initial_latency_seconds.",
-            "tipo_valor": "Decimal",
-            "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores mayores pueden sugerir planificación.",
-            "observaciones": "La latencia puede tener otras causas."
-        },
-        {
-            "variable": "monitoring_score",
-            "nombre_amigable": "Puntaje de monitoreo",
-            "modulo": "Scriptora W Proceso",
-            "dimension": "Monitoreo",
-            "descripcion": "Puntaje asociado a pausas largas.",
-            "como_se_calcula": "Reglas basadas en long_pause_count.",
-            "tipo_valor": "Decimal",
-            "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores mayores pueden sugerir monitoreo.",
-            "observaciones": "No toda pausa implica monitoreo."
-        },
-        {
-            "variable": "revision_score",
-            "nombre_amigable": "Puntaje de revisión",
-            "modulo": "Scriptora W Proceso",
-            "dimension": "Revisión",
-            "descripcion": "Puntaje asociado a borrados, reducciones y ajustes.",
-            "como_se_calcula": "Reglas basadas en deletion_count, reduction_count y local_adjustment_count.",
-            "tipo_valor": "Decimal",
-            "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores mayores sugieren actividad revisora.",
-            "observaciones": "Debe distinguirse corrección mecánica y revisión profunda."
-        },
-        {
-            "variable": "reformulation_score",
-            "nombre_amigable": "Puntaje de reformulación",
-            "modulo": "Scriptora W Proceso",
-            "dimension": "Reformulación",
-            "descripcion": "Puntaje asociado a cambios amplios.",
-            "como_se_calcula": "Reglas basadas en reformulation_count.",
-            "tipo_valor": "Decimal",
-            "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores mayores pueden sugerir reestructuración.",
-            "observaciones": "Requiere validación semántica."
-        },
-        {
-            "variable": "fluency_score",
-            "nombre_amigable": "Puntaje de fluidez escritural",
-            "modulo": "Scriptora W Proceso",
-            "dimension": "Fluidez",
-            "descripcion": "Puntaje asociado al ritmo de producción.",
-            "como_se_calcula": "Reglas basadas en words_per_minute.",
-            "tipo_valor": "Decimal",
-            "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores funcionales sugieren ritmo adecuado.",
-            "observaciones": "Velocidad alta no siempre implica mejor escritura."
-        },
-        {
-            "variable": "recursivity_score",
-            "nombre_amigable": "Puntaje de recursividad",
-            "modulo": "Scriptora W Proceso",
-            "dimension": "Recursividad",
-            "descripcion": "Puntaje asociado a ajustes macrotextuales.",
-            "como_se_calcula": "Reglas basadas en macro_adjustment_count.",
-            "tipo_valor": "Decimal",
-            "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores mayores pueden sugerir reorganización.",
-            "observaciones": "Estimación preliminar."
         },
         {
             "variable": "process_regulation_score",
@@ -1259,25 +1104,14 @@ def build_results_vertical_rows(flat_results):
     return rows
 
 
-def create_scriptora_excel(export_data):
+def create_single_analysis_excel(export_data):
     wb = Workbook()
 
     flat_results = flatten_dict(export_data["resultados"])
 
-    # Hoja 1: resultados verticales, legibles
     ws_results = wb.active
-    ws_results.title = "resultados"
-
-    vertical_headers = [
-        "variable",
-        "valor",
-        "nombre_amigable",
-        "modulo",
-        "dimension",
-        "descripcion"
-    ]
-
-    ws_results.append(vertical_headers)
+    ws_results.title = "resultados_vertical"
+    ws_results.append(["variable", "valor", "nombre_amigable", "modulo", "dimension", "descripcion"])
 
     vertical_rows = build_results_vertical_rows(flat_results)
 
@@ -1293,18 +1127,86 @@ def create_scriptora_excel(export_data):
 
     style_sheet(ws_results)
 
-    # Hoja 2: matriz horizontal para análisis estadístico
     ws_matrix = wb.create_sheet("matriz_analisis")
-
     matrix_headers = list(flat_results.keys())
     matrix_values = [safe_value(flat_results[h]) for h in matrix_headers]
-
     ws_matrix.append(matrix_headers)
     ws_matrix.append(matrix_values)
+    style_sheet(ws_matrix)
+
+    add_dictionary_sheet(wb)
+    add_metadata_sheet(wb, export_data["metadatos"])
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output
+
+
+def create_multi_analysis_excel(rows, metadata):
+    wb = Workbook()
+
+    ws_matrix = wb.active
+    ws_matrix.title = "matriz_multitexto"
+
+    if rows:
+        all_headers = []
+        for row in rows:
+            for key in row.keys():
+                if key not in all_headers:
+                    all_headers.append(key)
+
+        ws_matrix.append(all_headers)
+
+        for row in rows:
+            ws_matrix.append([safe_value(row.get(h, "")) for h in all_headers])
+    else:
+        ws_matrix.append(["mensaje"])
+        ws_matrix.append(["No se detectaron textos para analizar."])
 
     style_sheet(ws_matrix)
 
-    # Hoja 3: diccionario de variables
+    ws_readable = wb.create_sheet("resultados_vertical")
+    ws_readable.append(["id", "variable", "valor", "nombre_amigable", "modulo", "dimension", "descripcion"])
+
+    for row in rows:
+        text_id = row.get("id", "")
+        flat_row = flatten_dict(row)
+
+        for variable, value in flat_row.items():
+            clean_variable = variable
+            dict_info = get_dictionary_info(clean_variable)
+
+            ws_readable.append([
+                text_id,
+                variable,
+                safe_value(value),
+                dict_info.get("nombre_amigable", ""),
+                dict_info.get("modulo", ""),
+                dict_info.get("dimension", ""),
+                dict_info.get("descripcion", "")
+            ])
+
+    style_sheet(ws_readable)
+
+    add_dictionary_sheet(wb)
+    add_metadata_sheet(wb, metadata)
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output
+
+
+def get_dictionary_info(variable):
+    clean_variable = variable
+    if clean_variable.startswith("scores_"):
+        clean_variable = clean_variable
+    dictionary_map = {row["variable"]: row for row in build_variable_dictionary()}
+    return dictionary_map.get(clean_variable, {})
+
+
+def add_dictionary_sheet(wb):
     ws_dict = wb.create_sheet("diccionario_variables")
     dictionary_rows = build_variable_dictionary()
 
@@ -1328,20 +1230,15 @@ def create_scriptora_excel(export_data):
 
     style_sheet(ws_dict)
 
-    # Hoja 4: metadatos
+
+def add_metadata_sheet(wb, metadata):
     ws_meta = wb.create_sheet("metadatos")
     ws_meta.append(["campo", "valor"])
 
-    for key, value in export_data["metadatos"].items():
+    for key, value in metadata.items():
         ws_meta.append([key, safe_value(value)])
 
     style_sheet(ws_meta)
-
-    output = BytesIO()
-    wb.save(output)
-    output.seek(0)
-
-    return output
 
 
 # ============================================================
@@ -1393,12 +1290,8 @@ def home():
             font-weight: bold;
         }
         button:hover { background: #374151; }
-        .secondary {
-            background: #6b7280;
-        }
-        .secondary:hover {
-            background: #4b5563;
-        }
+        .secondary { background: #6b7280; }
+        .secondary:hover { background: #4b5563; }
         .result {
             margin-top: 25px;
             padding: 20px;
@@ -1465,18 +1358,27 @@ def home():
             padding: 8px;
             border: 1px solid #d8def5;
         }
+        .help {
+            font-size: 13px;
+            color: #555;
+            margin-top: -8px;
+            margin-bottom: 12px;
+            line-height: 1.4;
+        }
     </style>
 </head>
 <body>
 <div class="container">
     <h1>Scriptora Suite</h1>
-    <div class="subtitle">Analítica textual, evaluación escritural, regulación del proceso y exportación Excel · v0.7.1</div>
+    <div class="subtitle">Analítica textual, evaluación escritural, regulación del proceso, multitexto y exportación Excel · v0.8</div>
 
     <label>Módulo de análisis</label>
-    <select id="module">
-        <option value="text">Scriptora T · Analizar texto</option>
-        <option value="write_product">Scriptora W · Evaluar producto escrito</option>
+    <select id="module" onchange="updateModeHelp()">
+        <option value="text">Scriptora T · Texto individual</option>
+        <option value="write_product">Scriptora W · Producto escrito individual</option>
         <option value="write_process">Scriptora W · Producto + proceso escritural</option>
+        <option value="text_multi">Scriptora T · Multitexto</option>
+        <option value="write_product_multi">Scriptora W · Producto multitexto</option>
     </select>
 
     <label>Modo de ingreso</label>
@@ -1504,6 +1406,7 @@ def home():
     </div>
 
     <label>Texto a analizar</label>
+    <div id="modeHelp" class="help"></div>
     <textarea id="textInput" placeholder="Escribe aquí o pega un texto para analizar..."></textarea>
 
     <label>Nivel / audiencia objetivo</label>
@@ -1552,7 +1455,7 @@ def home():
         </div>
 
         <div class="note">
-            Análisis preliminar. Próximas versiones integrarán TRUNAJOD, MetaSistema, rúbricas humanas, benchmarks contextuales, captura avanzada del proceso y reportes exportables.
+            Análisis preliminar. Próximas versiones integrarán TRUNAJOD, MetaSistema, rúbricas humanas, benchmarks contextuales, captura avanzada del proceso, carga Excel y reportes institucionales.
         </div>
     </div>
 </div>
@@ -1585,10 +1488,32 @@ let previousText = "";
 let maxTextLength = 0;
 let previousParagraphCount = 0;
 
+let lastAnalysisWasMulti = false;
+
 const LONG_PAUSE_THRESHOLD_MS = 3000;
 const REFORMULATION_DELTA = 25;
 
 const textarea = document.getElementById("textInput");
+
+function updateModeHelp() {
+    const selectedModule = document.getElementById("module").value;
+    const help = document.getElementById("modeHelp");
+
+    if (selectedModule === "text_multi" || selectedModule === "write_product_multi") {
+        help.innerHTML = `
+            Modo multitexto. Usa este formato:<br>
+            ### ID: sujeto_001<br>
+            Texto del sujeto 001...<br><br>
+            ### ID: sujeto_002<br>
+            Texto del sujeto 002...<br><br>
+            También puedes separar textos con una línea que contenga solo ---.
+        `;
+    } else if (selectedModule === "write_process") {
+        help.innerHTML = "Modo proceso: escribe en vivo para capturar tiempo, pausas, ediciones y señales de regulación.";
+    } else {
+        help.innerHTML = "Modo individual: pega o escribe un texto para analizar.";
+    }
+}
 
 function startSessionIfNeeded() {
     if (!sessionStarted && !processClosed) {
@@ -1633,10 +1558,19 @@ textarea.addEventListener("focus", function() {
 });
 
 textarea.addEventListener("paste", function() {
-    document.getElementById("writingMode").value = "pasted";
+    const selectedModule = document.getElementById("module").value;
+    if (selectedModule === "write_process") {
+        document.getElementById("writingMode").value = "pasted";
+    }
 });
 
 textarea.addEventListener("input", function() {
+    const selectedModule = document.getElementById("module").value;
+
+    if (selectedModule !== "write_process") {
+        return;
+    }
+
     if (processClosed) {
         return;
     }
@@ -1751,6 +1685,8 @@ function resetProcessCapture() {
     maxTextLength = 0;
     previousParagraphCount = 0;
 
+    lastAnalysisWasMulti = false;
+
     if (timerInterval) {
         clearInterval(timerInterval);
         timerInterval = null;
@@ -1781,11 +1717,47 @@ async function runScriptora() {
     const genre = document.getElementById("genre").value;
 
     if (!text.trim()) {
-        alert("Por favor escribe o pega un texto antes de analizar.");
+        alert("Por favor escribe o pega texto antes de analizar.");
         return;
     }
 
-    if (!processClosed) {
+    document.getElementById("result").style.display = "block";
+    document.getElementById("processSection").style.display = "none";
+    document.getElementById("integratedSection").style.display = "none";
+
+    if (selectedModule === "text_multi" || selectedModule === "write_product_multi") {
+        lastAnalysisWasMulti = true;
+
+        const response = await fetch("/api/multi/analyze", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                raw_input: text,
+                selected_module: selectedModule,
+                language: "es",
+                level: level,
+                genre: genre,
+                purpose: "multitext_analysis"
+            })
+        });
+
+        const data = await response.json();
+
+        document.getElementById("moduleLabel").innerText = data.module;
+        document.getElementById("productTitle").innerText = "Resultado multitexto";
+        document.getElementById("metrics").innerHTML = `
+            <div class="metric"><strong>Textos procesados:</strong> ${data.total_texts}</div>
+            <div class="metric"><strong>Módulo:</strong> ${data.module}</div>
+        `;
+
+        document.getElementById("scores").innerHTML = renderMultiPreview(data.results);
+        document.getElementById("interpretation").innerText = "Análisis multitexto completado. Descarga el Excel para revisar la matriz completa por texto.";
+        return;
+    }
+
+    lastAnalysisWasMulti = false;
+
+    if (selectedModule === "write_process" && !processClosed) {
         freezeProcess();
     }
 
@@ -1847,11 +1819,7 @@ async function runScriptora() {
 
     const data = await response.json();
 
-    document.getElementById("result").style.display = "block";
     document.getElementById("moduleLabel").innerText = data.module;
-
-    document.getElementById("processSection").style.display = "none";
-    document.getElementById("integratedSection").style.display = "none";
 
     if (selectedModule === "text") {
         const metrics = data.raw_metrics;
@@ -1961,6 +1929,33 @@ function renderWritingProduct(metrics) {
     document.getElementById("interpretation").innerText = metrics.interpretation;
 }
 
+function renderMultiPreview(results) {
+    if (!results || results.length === 0) {
+        return "<p>No se detectaron textos.</p>";
+    }
+
+    let html = "<h3>Vista preliminar</h3>";
+    html += "<div class='score-box'>";
+
+    results.slice(0, 8).forEach((item) => {
+        const score = item.scores_global_writing_score || item.word_count || "";
+        html += `
+            <div class="score">
+                <strong>${item.id}</strong>
+                <span>${score}</span>
+            </div>
+        `;
+    });
+
+    html += "</div>";
+
+    if (results.length > 8) {
+        html += `<p class="note">Se muestran 8 de ${results.length} textos. Descarga el Excel para ver todo.</p>`;
+    }
+
+    return html;
+}
+
 async function downloadExcel() {
     const selectedModule = document.getElementById("module").value;
     const writingMode = document.getElementById("writingMode").value;
@@ -1969,11 +1964,44 @@ async function downloadExcel() {
     const genre = document.getElementById("genre").value;
 
     if (!text.trim()) {
-        alert("Por favor escribe o pega un texto antes de descargar el Excel.");
+        alert("Por favor escribe o pega texto antes de descargar el Excel.");
         return;
     }
 
-    if (!processClosed) {
+    if (selectedModule === "text_multi" || selectedModule === "write_product_multi") {
+        const response = await fetch("/api/export/multi-excel", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                raw_input: text,
+                selected_module: selectedModule,
+                language: "es",
+                level: level,
+                genre: genre,
+                purpose: "multitext_excel_export"
+            })
+        });
+
+        if (!response.ok) {
+            alert("No se pudo generar el Excel multitexto.");
+            return;
+        }
+
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "scriptora_multitexto_v0_8.xlsx";
+        document.body.appendChild(a);
+        a.click();
+
+        a.remove();
+        window.URL.revokeObjectURL(url);
+        return;
+    }
+
+    if (selectedModule === "write_process" && !processClosed) {
         freezeProcess();
     }
 
@@ -2005,9 +2033,7 @@ async function downloadExcel() {
 
     const response = await fetch("/api/export/excel", {
         method: "POST",
-        headers: {
-            "Content-Type": "application/json"
-        },
+        headers: {"Content-Type": "application/json"},
         body: JSON.stringify(payload)
     });
 
@@ -2021,13 +2047,15 @@ async function downloadExcel() {
 
     const a = document.createElement("a");
     a.href = url;
-    a.download = "scriptora_resultados.xlsx";
+    a.download = "scriptora_resultados_v0_8.xlsx";
     document.body.appendChild(a);
     a.click();
 
     a.remove();
     window.URL.revokeObjectURL(url);
 }
+
+updateModeHelp();
 </script>
 </body>
 </html>
@@ -2043,70 +2071,46 @@ def health():
     return {
         "status": "ok",
         "service": "Scriptora Suite",
-        "version": "0.7.1",
+        "version": "0.8.0",
         "timestamp": datetime.utcnow().isoformat()
     }
 
 
 @app.post("/api/text/analyze")
 def analyze_text(request: TextAnalysisRequest):
-    text = request.text.strip()
-    words = tokenize_words(text)
-    sentences = split_sentences(text)
-
-    word_count = len(words)
-    char_count = len(text)
-    sentence_count = len(sentences)
-    unique_words = len(set(words))
-
-    avg_sentence_length = round(word_count / sentence_count, 2) if sentence_count > 0 else 0
-    ttr = round(unique_words / word_count, 3) if word_count > 0 else 0
-    lexical_density = estimate_lexical_density(words)
-
-    interpretation = interpret_text_metrics(
-        word_count,
-        avg_sentence_length,
-        lexical_density,
-        ttr
-    )
+    metrics = analyze_text_core(request.text)
 
     return {
         "module": "Scriptora T · Text Analysis",
-        "version": "0.7.1",
+        "version": "0.8.0",
         "language": request.language,
         "context": request.context,
         "level": request.level,
         "genre": request.genre,
         "purpose": request.purpose,
         "raw_metrics": {
-            "word_count": word_count,
-            "char_count": char_count,
-            "sentence_count": sentence_count,
-            "unique_words": unique_words,
-            "avg_sentence_length": avg_sentence_length,
-            "type_token_ratio": ttr,
-            "lexical_density_proxy": lexical_density
+            "word_count": metrics["word_count"],
+            "char_count": metrics["char_count"],
+            "sentence_count": metrics["sentence_count"],
+            "unique_words": metrics["unique_words"],
+            "avg_sentence_length": metrics["avg_sentence_length"],
+            "type_token_ratio": metrics["type_token_ratio"],
+            "lexical_density_proxy": metrics["lexical_density_proxy"]
         },
-        "interpretation": interpretation
+        "interpretation": metrics["interpretation_text"]
     }
 
 
 @app.post("/api/write/evaluate")
 def evaluate_writing(request: WritingEvaluationRequest):
-    text = request.text.strip()
-    words = tokenize_words(text)
-    sentences = split_sentences(text)
-
     writing_metrics = score_writing_product(
-        text=text,
-        words=words,
-        sentences=sentences,
+        text=request.text,
         genre=request.genre or "general"
     )
 
     return {
         "module": "Scriptora W · Writing Product Evaluation",
-        "version": "0.7.1",
+        "version": "0.8.0",
         "language": request.language,
         "level": request.level,
         "genre": request.genre,
@@ -2118,14 +2122,8 @@ def evaluate_writing(request: WritingEvaluationRequest):
 
 @app.post("/api/write/process-evaluate")
 def evaluate_writing_process(request: WritingProcessRequest):
-    text = request.text.strip()
-    words = tokenize_words(text)
-    sentences = split_sentences(text)
-
     product_metrics = score_writing_product(
-        text=text,
-        words=words,
-        sentences=sentences,
+        text=request.text,
         genre=request.genre or "general"
     )
 
@@ -2138,7 +2136,7 @@ def evaluate_writing_process(request: WritingProcessRequest):
 
     return {
         "module": "Scriptora W · Product + Process Evaluation",
-        "version": "0.7.1",
+        "version": "0.8.0",
         "language": request.language,
         "level": request.level,
         "genre": request.genre,
@@ -2150,21 +2148,35 @@ def evaluate_writing_process(request: WritingProcessRequest):
     }
 
 
+@app.post("/api/multi/analyze")
+def multi_analyze(request: MultiTextRequest):
+    results = analyze_multitext(request)
+
+    module_label = "Scriptora T · Multitexto" if request.selected_module == "text_multi" else "Scriptora W · Producto multitexto"
+
+    return {
+        "module": module_label,
+        "version": "0.8.0",
+        "total_texts": len(results),
+        "language": request.language,
+        "level": request.level,
+        "genre": request.genre,
+        "results": results
+    }
+
+
 @app.post("/api/export/excel")
 def export_excel(request: ExcelExportRequest):
     analysis_id = str(uuid.uuid4())
     timestamp = datetime.utcnow().isoformat()
 
     text = request.text.strip()
-    words = tokenize_words(text)
-    sentences = split_sentences(text)
-
     selected_module = request.selected_module
 
     resultados = {
         "analysis_id": analysis_id,
         "timestamp_utc": timestamp,
-        "scriptora_version": "0.7.1",
+        "scriptora_version": "0.8.0",
         "selected_module": selected_module,
         "language": request.language,
         "level": request.level,
@@ -2176,37 +2188,16 @@ def export_excel(request: ExcelExportRequest):
     }
 
     if selected_module == "text":
-        word_count = len(words)
-        sentence_count = len(sentences)
-        unique_words = len(set(words))
-        avg_sentence_length = round(word_count / sentence_count, 2) if sentence_count > 0 else 0
-        ttr = round(unique_words / word_count, 3) if word_count > 0 else 0
-        lexical_density = estimate_lexical_density(words)
-
-        interpretation = interpret_text_metrics(
-            word_count,
-            avg_sentence_length,
-            lexical_density,
-            ttr
-        )
+        metrics = analyze_text_core(text)
 
         resultados.update({
             "module": "Scriptora T",
-            "word_count": word_count,
-            "char_count": len(text),
-            "sentence_count": sentence_count,
-            "unique_words": unique_words,
-            "avg_sentence_length": avg_sentence_length,
-            "type_token_ratio": ttr,
-            "lexical_density_proxy": lexical_density,
-            "interpretation_text": interpretation
+            **metrics
         })
 
     elif selected_module == "write_product":
         product_metrics = score_writing_product(
             text=text,
-            words=words,
-            sentences=sentences,
             genre=request.genre or "general"
         )
 
@@ -2220,8 +2211,6 @@ def export_excel(request: ExcelExportRequest):
     else:
         product_metrics = score_writing_product(
             text=text,
-            words=words,
-            sentences=sentences,
             genre=request.genre or "general"
         )
 
@@ -2239,23 +2228,19 @@ def export_excel(request: ExcelExportRequest):
             "integrated_interpretation": integrated
         })
 
-        product_flat = flatten_dict(product_metrics, "product")
-        process_flat = flatten_dict(process_metrics, "process")
-
-        resultados.update(product_flat)
-        resultados.update(process_flat)
+        resultados.update(flatten_dict(product_metrics, "product"))
+        resultados.update(flatten_dict(process_metrics, "process"))
 
     metadatos = {
         "analysis_id": analysis_id,
         "timestamp_utc": timestamp,
-        "scriptora_version": "0.7.1",
-        "archivo_generado": "scriptora_resultados.xlsx",
-        "descripcion": "Archivo generado automáticamente por Scriptora Suite.",
-        "hoja_resultados": "Contiene los resultados en formato vertical legible.",
-        "hoja_matriz_analisis": "Contiene los mismos resultados en formato horizontal para análisis estadístico.",
-        "hoja_diccionario_variables": "Contiene definiciones operativas de las variables incluidas.",
-        "hoja_metadatos": "Contiene información general sobre el análisis y la versión.",
-        "advertencia_metodologica": "Los resultados son preliminares y deben calibrarse con datos reales, rúbricas humanas y benchmarks contextuales.",
+        "scriptora_version": "0.8.0",
+        "archivo_generado": "scriptora_resultados_v0_8.xlsx",
+        "hoja_resultados_vertical": "Resultados en formato vertical legible.",
+        "hoja_matriz_analisis": "Resultados en formato horizontal para análisis estadístico.",
+        "hoja_diccionario_variables": "Definiciones operativas de las variables incluidas.",
+        "hoja_metadatos": "Información general del análisis y versión.",
+        "advertencia_metodologica": "Resultados preliminares; deben calibrarse con datos reales, rúbricas humanas y benchmarks contextuales.",
         "trazabilidad_proceso": "La interpretación del proceso solo es válida cuando el texto fue escrito en vivo y no pegado."
     }
 
@@ -2264,9 +2249,46 @@ def export_excel(request: ExcelExportRequest):
         "metadatos": metadatos
     }
 
-    output = create_scriptora_excel(excel_data)
+    output = create_single_analysis_excel(excel_data)
 
-    filename = f"scriptora_resultados_{analysis_id[:8]}.xlsx"
+    filename = f"scriptora_resultados_v0_8_{analysis_id[:8]}.xlsx"
+
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}"
+        }
+    )
+
+
+@app.post("/api/export/multi-excel")
+def export_multi_excel(request: MultiExcelExportRequest):
+    analysis_id = str(uuid.uuid4())
+    timestamp = datetime.utcnow().isoformat()
+
+    rows = analyze_multitext(request)
+
+    metadata = {
+        "analysis_id": analysis_id,
+        "timestamp_utc": timestamp,
+        "scriptora_version": "0.8.0",
+        "archivo_generado": "scriptora_multitexto_v0_8.xlsx",
+        "selected_module": request.selected_module,
+        "language": request.language,
+        "level": request.level,
+        "genre": request.genre,
+        "total_texts": len(rows),
+        "formato_entrada": "Bloques con ### ID: o separación mediante línea ---.",
+        "hoja_matriz_multitexto": "Una fila por texto procesado.",
+        "hoja_resultados_vertical": "Resultados en formato vertical por ID y variable.",
+        "hoja_diccionario_variables": "Definiciones operativas de variables.",
+        "advertencia_metodologica": "Resultados preliminares; requieren calibración con corpus reales, rúbricas humanas y benchmarks contextuales."
+    }
+
+    output = create_multi_analysis_excel(rows, metadata)
+
+    filename = f"scriptora_multitexto_v0_8_{analysis_id[:8]}.xlsx"
 
     return StreamingResponse(
         output,
@@ -2300,7 +2322,19 @@ def list_benchmarks():
                 "status": "prototype"
             },
             {
-                "benchmark_id": "ES_WRITE_EXPORT_EXCEL_V1",
+                "benchmark_id": "ES_TEXT_MULTI_V1",
+                "module": "Scriptora T · Multitexto",
+                "language": "es",
+                "status": "prototype"
+            },
+            {
+                "benchmark_id": "ES_WRITE_PRODUCT_MULTI_V1",
+                "module": "Scriptora W · Producto multitexto",
+                "language": "es",
+                "status": "prototype"
+            },
+            {
+                "benchmark_id": "ES_WRITE_EXPORT_EXCEL_V2",
                 "module": "Scriptora Suite · Export",
                 "language": "es",
                 "status": "prototype"
