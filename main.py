@@ -12,7 +12,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
 
-SCRIPTORA_VERSION = "0.9.4"
+SCRIPTORA_VERSION = "0.9.5"
 
 
 app = FastAPI(
@@ -103,6 +103,10 @@ class ParticipantSubmissionRequest(BaseModel):
     genre: str | None = "argumentativo"
     task: str | None = "participant_writing_task"
     purpose: str | None = "silent_participant_submission"
+    total_time_seconds: float | None = 0
+    task_version: str | None = "IA_opinion_v1"
+    min_words_required: int | None = 50
+    suggested_word_range: str | None = "80-120"
 
 
 # ============================================================
@@ -868,6 +872,10 @@ def create_participant_record(request: ParticipantSubmissionRequest):
             "genre": request.genre,
             "task": request.task,
             "purpose": request.purpose,
+            "task_version": request.task_version,
+            "total_time_seconds": request.total_time_seconds,
+            "min_words_required": request.min_words_required,
+            "suggested_word_range": request.suggested_word_range,
             "texto_original": text
         },
         product_metrics=product_metrics
@@ -1433,7 +1441,8 @@ def home():
         <div class="task-box">
             <h2>Tarea de escritura</h2>
             <p>Lee atentamente la consigna y escribe tu respuesta en el espacio indicado. Cuando termines, presiona “Enviar respuesta”.</p>
-            <p><strong>Consigna:</strong> Escribe un texto breve en el que expreses tu opinión sobre el uso de la inteligencia artificial en educación.</p>
+            <p><strong>Consigna:</strong> Escribe un texto breve <strong>entre 80 y 120 palabras</strong> en el que expreses tu opinión sobre el uso de la inteligencia artificial en educación.</p>
+            <p class="note">El sistema solo permitirá enviar respuestas con al menos 50 palabras. Idealmente, mantén tu respuesta entre 80 y 120 palabras.</p>
         </div>
 
         <label>ID participante opcional</label>
@@ -1441,6 +1450,7 @@ def home():
 
         <label>Tu respuesta</label>
         <textarea id="participantText" placeholder="Escribe aquí tu respuesta..."></textarea>
+        <div id="participantWordCounter" class="note">Palabras: 0 · mínimo requerido: 50 · rango sugerido: 80–120</div>
 
         <button onclick="submitParticipantResponse()">Enviar respuesta</button>
 
@@ -1623,11 +1633,39 @@ const LONG_PAUSE_THRESHOLD_MS = 3000;
 const SIGNIFICANT_EDIT_DELTA = 5;
 const REFORMULATION_DELTA = 20;
 
+let participantStartTime = null;
+
+function countWordsSimple(text) {
+    return text.trim().split(/\s+/).filter(w => w.length > 0).length;
+}
+
+function updateParticipantWordCounter() {
+    const text = document.getElementById("participantText").value;
+    const count = countWordsSimple(text);
+    const counter = document.getElementById("participantWordCounter");
+    if (!counter) return;
+
+    let status = "mínimo requerido: 50 · rango sugerido: 80–120";
+    if (count < 50) {
+        status = "faltan " + (50 - count) + " palabras para poder enviar";
+    } else if (count < 80) {
+        status = "ya puedes enviar · sugerido: agregar " + (80 - count) + " palabras";
+    } else if (count <= 120) {
+        status = "rango sugerido logrado";
+    } else {
+        status = "sobre el rango sugerido";
+    }
+
+    counter.innerText = "Palabras: " + count + " · " + status;
+}
+
 function enterParticipant() {{
     document.getElementById("roleScreen").classList.add("hidden");
     document.getElementById("participantScreen").classList.remove("hidden");
     document.getElementById("researcherScreen").classList.add("hidden");
     document.getElementById("participantConfirmation").style.display = "none";
+    participantStartTime = Date.now();
+    updateParticipantWordCounter();
 }}
 
 function enterResearcher() {{
@@ -1662,7 +1700,11 @@ async function submitParticipantResponse() {{
             level: "general",
             genre: "argumentativo",
             task: "participant_writing_task",
-            purpose: "silent_participant_submission"
+            purpose: "silent_participant_submission",
+            total_time_seconds: participantTotalTime,
+            task_version: "IA_opinion_v1",
+            min_words_required: 50,
+            suggested_word_range: "80-120"
         }})
     }});
 
@@ -1672,6 +1714,8 @@ async function submitParticipantResponse() {{
     }}
 
     document.getElementById("participantText").value = "";
+    participantStartTime = Date.now();
+    updateParticipantWordCounter();
     document.getElementById("participantConfirmation").style.display = "block";
 }}
 
@@ -2548,4 +2592,3 @@ def export_excel(request: ExcelExportRequest):
             "Content-Disposition": f"attachment; filename={filename}"
         }
     )
-
