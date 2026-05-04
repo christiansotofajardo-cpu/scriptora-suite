@@ -14,8 +14,8 @@ from openpyxl.utils import get_column_letter
 
 app = FastAPI(
     title="Scriptora Suite API",
-    description="Scriptora Suite: analítica textual, evaluación escritural, proceso de escritura, multitexto y exportación Excel.",
-    version="0.8.1"
+    description="Scriptora Suite: plataforma para análisis textual, escritura, proceso escritural, multitexto y exportación Excel por roles.",
+    version="0.9.0"
 )
 
 
@@ -1254,7 +1254,7 @@ def home():
             color: #222;
         }
         .container {
-            max-width: 980px;
+            max-width: 1040px;
             margin: auto;
             background: white;
             padding: 30px;
@@ -1262,8 +1262,9 @@ def home():
             box-shadow: 0 8px 30px rgba(0,0,0,0.08);
         }
         h1 { margin-bottom: 5px; font-size: 34px; }
+        h2 { margin-top: 0; }
         .subtitle { color: #666; margin-bottom: 25px; }
-        textarea, select, button {
+        textarea, select, button, input {
             width: 100%;
             margin-top: 10px;
             margin-bottom: 15px;
@@ -1273,7 +1274,7 @@ def home():
             border: 1px solid #ccc;
             box-sizing: border-box;
         }
-        textarea { height: 190px; }
+        textarea { height: 210px; }
         button {
             background: #111827;
             color: white;
@@ -1284,6 +1285,14 @@ def home():
         button:hover { background: #374151; }
         .secondary { background: #6b7280; }
         .secondary:hover { background: #4b5563; }
+        .success {
+            background: #ecfdf5;
+            border: 1px solid #a7f3d0;
+            padding: 20px;
+            border-radius: 14px;
+            display: none;
+            margin-top: 20px;
+        }
         .result {
             margin-top: 25px;
             padding: 20px;
@@ -1357,99 +1366,193 @@ def home():
             margin-bottom: 12px;
             line-height: 1.4;
         }
+        .role-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .role-card {
+            border: 1px solid #d1d5db;
+            background: #f9fafb;
+            padding: 22px;
+            border-radius: 16px;
+        }
+        .role-card h3 {
+            margin-top: 0;
+        }
+        .hidden {
+            display: none;
+        }
+        .topbar {
+            display: flex;
+            gap: 10px;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 18px;
+        }
+        .topbar button {
+            width: auto;
+            padding: 10px 16px;
+            margin: 0;
+        }
+        .task-box {
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
+            padding: 18px;
+            border-radius: 14px;
+            margin-bottom: 18px;
+        }
     </style>
 </head>
 <body>
 <div class="container">
-    <h1>Scriptora Suite</h1>
-    <div class="subtitle">Analítica textual, evaluación escritural, regulación del proceso, multitexto y exportación Excel · v0.8.1</div>
 
-    <label>Módulo de análisis</label>
-    <select id="module" onchange="handleModuleChange()">
-        <option value="text">Scriptora T · Texto individual</option>
-        <option value="write_product">Scriptora W · Producto escrito individual</option>
-        <option value="write_process">Scriptora W · Producto + proceso escritural</option>
-        <option value="text_multi">Scriptora T · Multitexto</option>
-        <option value="write_product_multi">Scriptora W · Producto multitexto</option>
-    </select>
+    <div id="roleScreen">
+        <h1>Scriptora</h1>
+        <div class="subtitle">Plataforma para captura, análisis y evaluación investigativa de la escritura y el texto · v0.9</div>
 
-    <div id="writingModeBlock">
-        <label>Modo de ingreso</label>
-        <select id="writingMode">
-            <option value="live">Escribir en vivo / capturar proceso</option>
-            <option value="pasted">Pegar texto ya escrito / solo producto</option>
-        </select>
-    </div>
+        <div class="role-grid">
+            <div class="role-card">
+                <h3>Modo participante</h3>
+                <p>Para responder una tarea de escritura en una interfaz limpia, sin resultados visibles.</p>
+                <button onclick="enterParticipant()">Ingresar como participante</button>
+            </div>
 
-    <div id="processPanel" class="process-panel">
-        <strong>Registro de proceso escritural</strong>
-        <div class="small-grid">
-            <div class="small-box">Tiempo: <span id="timer">0</span> s</div>
-            <div class="small-box">Latencia inicial: <span id="latency">0</span> s</div>
-            <div class="small-box">Pausas largas: <span id="longPauses">0</span></div>
-            <div class="small-box">Ediciones: <span id="edits">0</span></div>
-            <div class="small-box">Inserciones: <span id="insertions">0</span></div>
-            <div class="small-box">Borrados: <span id="deletions">0</span></div>
-            <div class="small-box">Ajustes locales: <span id="localAdjustments">0</span></div>
-            <div class="small-box">Reformulaciones: <span id="reformulations">0</span></div>
-            <div class="small-box">Expansiones: <span id="expansions">0</span></div>
-            <div class="small-box">Reducciones: <span id="reductions">0</span></div>
-            <div class="small-box">Ajustes macro: <span id="macroAdjustments">0</span></div>
-            <div class="small-box">Eventos: <span id="events">0</span></div>
-        </div>
-    </div>
-
-    <label>Texto a analizar</label>
-    <div id="modeHelp" class="help"></div>
-    <textarea id="textInput" placeholder="Escribe aquí o pega un texto para analizar..."></textarea>
-
-    <label>Nivel / audiencia objetivo</label>
-    <select id="level">
-        <option value="general">General</option>
-        <option value="1_4_basico">1°–4° básico</option>
-        <option value="5_8_basico">5°–8° básico</option>
-        <option value="media">Enseñanza media</option>
-        <option value="universitario">Universitario</option>
-        <option value="adulto">Adulto general</option>
-    </select>
-
-    <label>Tipo de texto</label>
-    <select id="genre">
-        <option value="general">General</option>
-        <option value="narrativo">Narrativo</option>
-        <option value="argumentativo">Argumentativo</option>
-        <option value="expositivo">Expositivo</option>
-        <option value="tecnico">Técnico</option>
-    </select>
-
-    <button onclick="runScriptora()">Analizar con Scriptora</button>
-    <button class="secondary" onclick="downloadExcel()">Descargar Excel</button>
-    <button class="secondary" onclick="resetProcessCapture()">Reiniciar captura</button>
-
-    <div id="result" class="result">
-        <div id="moduleLabel" class="pill"></div>
-        <h2>Resultado preliminar</h2>
-
-        <h3 id="productTitle">Producto textual</h3>
-        <div id="metrics"></div>
-        <div id="scores"></div>
-
-        <div id="processSection" style="display:none;">
-            <h3>Proceso escritural</h3>
-            <div id="processMetrics"></div>
-            <div id="processScores"></div>
-        </div>
-
-        <h3>Interpretación</h3>
-        <p id="interpretation"></p>
-
-        <div id="integratedSection" style="display:none;">
-            <h3>Síntesis integrada</h3>
-            <p id="integratedInterpretation"></p>
+            <div class="role-card">
+                <h3>Modo investigador</h3>
+                <p>Para analizar textos, productos escritos, procesos de escritura, corpus y descargar Excel.</p>
+                <button onclick="enterResearcher()">Ingresar como investigador</button>
+            </div>
         </div>
 
         <div class="note">
-            Análisis preliminar. Próximas versiones integrarán TRUNAJOD, MetaSistema, rúbricas humanas, benchmarks contextuales, captura avanzada del proceso, carga Excel y reportes institucionales.
+            En futuras versiones se agregará ingreso con clave para participantes, investigadores y administradores.
+        </div>
+    </div>
+
+    <div id="participantScreen" class="hidden">
+        <div class="topbar">
+            <div>
+                <h1>Scriptora Participante</h1>
+                <div class="subtitle">Tarea de escritura</div>
+            </div>
+            <button class="secondary" onclick="goHome()">Volver</button>
+        </div>
+
+        <div class="task-box">
+            <h2>Tarea de escritura</h2>
+            <p>Lee atentamente la consigna y escribe tu respuesta en el espacio indicado. Cuando termines, presiona “Enviar respuesta”.</p>
+            <p><strong>Consigna:</strong> Escribe un texto breve en el que expreses tu opinión sobre el uso de la inteligencia artificial en educación.</p>
+        </div>
+
+        <label>Tu respuesta</label>
+        <textarea id="participantText" placeholder="Escribe aquí tu respuesta..."></textarea>
+
+        <button onclick="submitParticipantResponse()">Enviar respuesta</button>
+
+        <div id="participantConfirmation" class="success">
+            <h2>Respuesta enviada</h2>
+            <p>Tu respuesta fue enviada correctamente. Muchas gracias por participar.</p>
+        </div>
+    </div>
+
+    <div id="researcherScreen" class="hidden">
+        <div class="topbar">
+            <div>
+                <h1>Scriptora Investigador</h1>
+                <div class="subtitle">Análisis textual, evaluación escritural, proceso, multitexto y exportación Excel</div>
+            </div>
+            <button class="secondary" onclick="goHome()">Volver</button>
+        </div>
+
+        <label>Módulo de análisis</label>
+        <select id="module" onchange="handleModuleChange()">
+            <option value="text">Scriptora T · Texto individual</option>
+            <option value="write_product">Scriptora W · Producto escrito individual</option>
+            <option value="write_process">Scriptora W · Producto + proceso escritural</option>
+            <option value="text_multi">Scriptora T · Multitexto</option>
+            <option value="write_product_multi">Scriptora W · Producto multitexto</option>
+        </select>
+
+        <div id="writingModeBlock">
+            <label>Modo de ingreso</label>
+            <select id="writingMode">
+                <option value="live">Escribir en vivo / capturar proceso</option>
+                <option value="pasted">Pegar texto ya escrito / solo producto</option>
+            </select>
+        </div>
+
+        <div id="processPanel" class="process-panel">
+            <strong>Registro de proceso escritural</strong>
+            <div class="small-grid">
+                <div class="small-box">Tiempo: <span id="timer">0</span> s</div>
+                <div class="small-box">Latencia inicial: <span id="latency">0</span> s</div>
+                <div class="small-box">Pausas largas: <span id="longPauses">0</span></div>
+                <div class="small-box">Ediciones: <span id="edits">0</span></div>
+                <div class="small-box">Inserciones: <span id="insertions">0</span></div>
+                <div class="small-box">Borrados: <span id="deletions">0</span></div>
+                <div class="small-box">Ajustes locales: <span id="localAdjustments">0</span></div>
+                <div class="small-box">Reformulaciones: <span id="reformulations">0</span></div>
+                <div class="small-box">Expansiones: <span id="expansions">0</span></div>
+                <div class="small-box">Reducciones: <span id="reductions">0</span></div>
+                <div class="small-box">Ajustes macro: <span id="macroAdjustments">0</span></div>
+                <div class="small-box">Eventos: <span id="events">0</span></div>
+            </div>
+        </div>
+
+        <label>Texto a analizar</label>
+        <div id="modeHelp" class="help"></div>
+        <textarea id="textInput" placeholder="Escribe aquí o pega un texto para analizar..."></textarea>
+
+        <label>Nivel / audiencia objetivo</label>
+        <select id="level">
+            <option value="general">General</option>
+            <option value="1_4_basico">1°–4° básico</option>
+            <option value="5_8_basico">5°–8° básico</option>
+            <option value="media">Enseñanza media</option>
+            <option value="universitario">Universitario</option>
+            <option value="adulto">Adulto general</option>
+        </select>
+
+        <label>Tipo de texto</label>
+        <select id="genre">
+            <option value="general">General</option>
+            <option value="narrativo">Narrativo</option>
+            <option value="argumentativo">Argumentativo</option>
+            <option value="expositivo">Expositivo</option>
+            <option value="tecnico">Técnico</option>
+        </select>
+
+        <button onclick="runScriptora()">Analizar con Scriptora</button>
+        <button class="secondary" onclick="downloadExcel()">Descargar Excel</button>
+        <button class="secondary" onclick="resetProcessCapture()">Reiniciar captura</button>
+
+        <div id="result" class="result">
+            <div id="moduleLabel" class="pill"></div>
+            <h2>Resultado preliminar</h2>
+
+            <h3 id="productTitle">Producto textual</h3>
+            <div id="metrics"></div>
+            <div id="scores"></div>
+
+            <div id="processSection" style="display:none;">
+                <h3>Proceso escritural</h3>
+                <div id="processMetrics"></div>
+                <div id="processScores"></div>
+            </div>
+
+            <h3>Interpretación</h3>
+            <p id="interpretation"></p>
+
+            <div id="integratedSection" style="display:none;">
+                <h3>Síntesis integrada</h3>
+                <p id="integratedInterpretation"></p>
+            </div>
+
+            <div class="note">
+                La pantalla entrega una vista preliminar. El análisis completo debe revisarse en el Excel exportado.
+            </div>
         </div>
     </div>
 </div>
@@ -1485,7 +1588,49 @@ let previousParagraphCount = 0;
 const LONG_PAUSE_THRESHOLD_MS = 3000;
 const REFORMULATION_DELTA = 25;
 
-const textarea = document.getElementById("textInput");
+function enterParticipant() {
+    document.getElementById("roleScreen").classList.add("hidden");
+    document.getElementById("participantScreen").classList.remove("hidden");
+    document.getElementById("researcherScreen").classList.add("hidden");
+}
+
+function enterResearcher() {
+    document.getElementById("roleScreen").classList.add("hidden");
+    document.getElementById("participantScreen").classList.add("hidden");
+    document.getElementById("researcherScreen").classList.remove("hidden");
+    handleModuleChange();
+}
+
+function goHome() {
+    document.getElementById("roleScreen").classList.remove("hidden");
+    document.getElementById("participantScreen").classList.add("hidden");
+    document.getElementById("researcherScreen").classList.add("hidden");
+}
+
+async function submitParticipantResponse() {
+    const text = document.getElementById("participantText").value;
+
+    if (!text.trim()) {
+        alert("Por favor escribe una respuesta antes de enviar.");
+        return;
+    }
+
+    await fetch("/api/write/evaluate", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+            text: text,
+            language: "es",
+            level: "general",
+            genre: "argumentativo",
+            task: "participant_writing_task",
+            purpose: "silent_participant_submission"
+        })
+    });
+
+    document.getElementById("participantText").value = "";
+    document.getElementById("participantConfirmation").style.display = "block";
+}
 
 function currentModule() {
     return document.getElementById("module").value;
@@ -1620,92 +1765,96 @@ function updatePanel() {
     document.getElementById("events").innerText = inputEventCount;
 }
 
-textarea.addEventListener("focus", function() {
-    if (isProcessModule()) {
+document.addEventListener("DOMContentLoaded", function() {
+    const textarea = document.getElementById("textInput");
+
+    textarea.addEventListener("focus", function() {
+        if (isProcessModule()) {
+            startSessionIfNeeded();
+        }
+    });
+
+    textarea.addEventListener("paste", function() {
+        if (isProcessModule()) {
+            document.getElementById("writingMode").value = "pasted";
+        }
+    });
+
+    textarea.addEventListener("input", function() {
+        if (!isProcessModule()) {
+            return;
+        }
+
+        if (processClosed) {
+            return;
+        }
+
         startSessionIfNeeded();
-    }
-});
 
-textarea.addEventListener("paste", function() {
-    if (isProcessModule()) {
-        document.getElementById("writingMode").value = "pasted";
-    }
-});
+        const now = Date.now();
+        const currentText = textarea.value;
+        const currentParagraphCount = paragraphCount(currentText);
 
-textarea.addEventListener("input", function() {
-    if (!isProcessModule()) {
-        return;
-    }
+        if (!writingStarted) {
+            writingStarted = true;
+            firstInputTime = now;
+            previousParagraphCount = currentParagraphCount;
+        }
 
-    if (processClosed) {
-        return;
-    }
+        if (lastInputTime) {
+            const gap = now - lastInputTime;
+            if (gap >= LONG_PAUSE_THRESHOLD_MS) {
+                longPauseCount += 1;
+            }
+        }
 
-    startSessionIfNeeded();
+        inputEventCount += 1;
 
-    const now = Date.now();
-    const currentText = textarea.value;
-    const currentParagraphCount = paragraphCount(currentText);
+        const delta = currentText.length - previousText.length;
 
-    if (!writingStarted) {
-        writingStarted = true;
-        firstInputTime = now;
+        if (delta > 0) {
+            insertionCount += delta;
+            editCount += 1;
+            expansionCount += 1;
+
+            if (delta <= 15) {
+                localAdjustmentCount += 1;
+            }
+
+            if (delta >= REFORMULATION_DELTA) {
+                reformulationCount += 1;
+            }
+        }
+
+        if (delta < 0) {
+            const absDelta = Math.abs(delta);
+            deletionCount += absDelta;
+            editCount += 1;
+            reductionCount += 1;
+
+            if (absDelta <= 15) {
+                localAdjustmentCount += 1;
+            }
+
+            if (absDelta >= REFORMULATION_DELTA) {
+                reformulationCount += 1;
+            }
+        }
+
+        if (currentParagraphCount !== previousParagraphCount && inputEventCount > 1) {
+            macroAdjustmentCount += 1;
+        }
+
+        if (currentText.length > maxTextLength) {
+            maxTextLength = currentText.length;
+        }
+
+        previousText = currentText;
         previousParagraphCount = currentParagraphCount;
-    }
+        lastInputTime = now;
 
-    if (lastInputTime) {
-        const gap = now - lastInputTime;
-        if (gap >= LONG_PAUSE_THRESHOLD_MS) {
-            longPauseCount += 1;
-        }
-    }
-
-    inputEventCount += 1;
-
-    const delta = currentText.length - previousText.length;
-
-    if (delta > 0) {
-        insertionCount += delta;
-        editCount += 1;
-        expansionCount += 1;
-
-        if (delta <= 15) {
-            localAdjustmentCount += 1;
-        }
-
-        if (delta >= REFORMULATION_DELTA) {
-            reformulationCount += 1;
-        }
-    }
-
-    if (delta < 0) {
-        const absDelta = Math.abs(delta);
-        deletionCount += absDelta;
-        editCount += 1;
-        reductionCount += 1;
-
-        if (absDelta <= 15) {
-            localAdjustmentCount += 1;
-        }
-
-        if (absDelta >= REFORMULATION_DELTA) {
-            reformulationCount += 1;
-        }
-    }
-
-    if (currentParagraphCount !== previousParagraphCount && inputEventCount > 1) {
-        macroAdjustmentCount += 1;
-    }
-
-    if (currentText.length > maxTextLength) {
-        maxTextLength = currentText.length;
-    }
-
-    previousText = currentText;
-    previousParagraphCount = currentParagraphCount;
-    lastInputTime = now;
-
-    updatePanel();
+        updatePanel();
+    });
 });
 
 function freezeProcess() {
@@ -2014,7 +2163,7 @@ async function downloadExcel() {
 
         const a = document.createElement("a");
         a.href = url;
-        a.download = "scriptora_multitexto_v0_8_1.xlsx";
+        a.download = "scriptora_multitexto_v0_9.xlsx";
         document.body.appendChild(a);
         a.click();
 
@@ -2069,15 +2218,13 @@ async function downloadExcel() {
 
     const a = document.createElement("a");
     a.href = url;
-    a.download = "scriptora_resultados_v0_8_1.xlsx";
+    a.download = "scriptora_resultados_v0_9.xlsx";
     document.body.appendChild(a);
     a.click();
 
     a.remove();
     window.URL.revokeObjectURL(url);
 }
-
-handleModuleChange();
 </script>
 </body>
 </html>
@@ -2093,7 +2240,7 @@ def health():
     return {
         "status": "ok",
         "service": "Scriptora Suite",
-        "version": "0.8.1",
+        "version": "0.9.0",
         "timestamp": datetime.utcnow().isoformat()
     }
 
@@ -2104,7 +2251,7 @@ def analyze_text(request: TextAnalysisRequest):
 
     return {
         "module": "Scriptora T · Text Analysis",
-        "version": "0.8.1",
+        "version": "0.9.0",
         "language": request.language,
         "context": request.context,
         "level": request.level,
@@ -2132,7 +2279,7 @@ def evaluate_writing(request: WritingEvaluationRequest):
 
     return {
         "module": "Scriptora W · Writing Product Evaluation",
-        "version": "0.8.1",
+        "version": "0.9.0",
         "language": request.language,
         "level": request.level,
         "genre": request.genre,
@@ -2158,7 +2305,7 @@ def evaluate_writing_process(request: WritingProcessRequest):
 
     return {
         "module": "Scriptora W · Product + Process Evaluation",
-        "version": "0.8.1",
+        "version": "0.9.0",
         "language": request.language,
         "level": request.level,
         "genre": request.genre,
@@ -2178,7 +2325,7 @@ def multi_analyze(request: MultiTextRequest):
 
     return {
         "module": module_label,
-        "version": "0.8.1",
+        "version": "0.9.0",
         "total_texts": len(results),
         "language": request.language,
         "level": request.level,
@@ -2198,7 +2345,7 @@ def export_excel(request: ExcelExportRequest):
     resultados = {
         "analysis_id": analysis_id,
         "timestamp_utc": timestamp,
-        "scriptora_version": "0.8.1",
+        "scriptora_version": "0.9.0",
         "selected_module": selected_module,
         "language": request.language,
         "level": request.level,
@@ -2256,8 +2403,8 @@ def export_excel(request: ExcelExportRequest):
     metadatos = {
         "analysis_id": analysis_id,
         "timestamp_utc": timestamp,
-        "scriptora_version": "0.8.1",
-        "archivo_generado": "scriptora_resultados_v0_8_1.xlsx",
+        "scriptora_version": "0.9.0",
+        "archivo_generado": "scriptora_resultados_v0_9.xlsx",
         "hoja_resultados_vertical": "Resultados en formato vertical legible.",
         "hoja_matriz_analisis": "Resultados en formato horizontal para análisis estadístico.",
         "hoja_diccionario_variables": "Definiciones operativas de las variables incluidas.",
@@ -2273,7 +2420,7 @@ def export_excel(request: ExcelExportRequest):
 
     output = create_single_analysis_excel(excel_data)
 
-    filename = f"scriptora_resultados_v0_8_1_{analysis_id[:8]}.xlsx"
+    filename = f"scriptora_resultados_v0_9_{analysis_id[:8]}.xlsx"
 
     return StreamingResponse(
         output,
@@ -2294,8 +2441,8 @@ def export_multi_excel(request: MultiExcelExportRequest):
     metadata = {
         "analysis_id": analysis_id,
         "timestamp_utc": timestamp,
-        "scriptora_version": "0.8.1",
-        "archivo_generado": "scriptora_multitexto_v0_8_1.xlsx",
+        "scriptora_version": "0.9.0",
+        "archivo_generado": "scriptora_multitexto_v0_9.xlsx",
         "selected_module": request.selected_module,
         "language": request.language,
         "level": request.level,
@@ -2310,7 +2457,7 @@ def export_multi_excel(request: MultiExcelExportRequest):
 
     output = create_multi_analysis_excel(rows, metadata)
 
-    filename = f"scriptora_multitexto_v0_8_1_{analysis_id[:8]}.xlsx"
+    filename = f"scriptora_multitexto_v0_9_{analysis_id[:8]}.xlsx"
 
     return StreamingResponse(
         output,
@@ -2356,8 +2503,8 @@ def list_benchmarks():
                 "status": "prototype"
             },
             {
-                "benchmark_id": "ES_WRITE_EXPORT_EXCEL_V3",
-                "module": "Scriptora Suite · Export",
+                "benchmark_id": "ES_ROLE_BASED_INTERFACE_V1",
+                "module": "Scriptora · Roles",
                 "language": "es",
                 "status": "prototype"
             }
