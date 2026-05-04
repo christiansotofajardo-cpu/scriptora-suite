@@ -12,10 +12,13 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
 
+SCRIPTORA_VERSION = "0.9.4"
+
+
 app = FastAPI(
     title="Scriptora Suite API",
     description="Scriptora Suite: análisis textual, evaluación escritural, proceso, participantes, corpus Excel y exportación.",
-    version="0.9.3"
+    version=SCRIPTORA_VERSION
 )
 
 
@@ -343,6 +346,7 @@ def score_writing_product(text, words=None, sentences=None, genre="general"):
     closure_score = 80 if closure_present else 45
 
     lower_text = text.lower()
+    genre = (genre or "general").lower()
     genre_score = 65
     genre_comment = "La adecuación al género se estima de manera preliminar."
 
@@ -440,6 +444,14 @@ def score_writing_product(text, words=None, sentences=None, genre="general"):
 # SCRIPTORA W PROCESO
 # ============================================================
 
+def get_evidence_label(word_count, total_time, input_event_count):
+    if word_count < 40 or total_time < 20 or input_event_count < 20:
+        return "Baja evidencia"
+    if word_count < 120 or total_time < 60:
+        return "Evidencia media"
+    return "Alta evidencia"
+
+
 def score_writing_process(request: WritingProcessRequest):
     text = request.text.strip()
 
@@ -464,6 +476,7 @@ def score_writing_process(request: WritingProcessRequest):
 
     words_per_minute = round((word_count / total_time) * 60, 2) if total_time > 0 else 0
     final_stability_ratio = round(final_text_length / max_text_length, 3) if max_text_length > 0 else 1
+    evidence_label = get_evidence_label(word_count, total_time, input_event_count)
 
     if writing_mode == "pasted":
         return {
@@ -484,6 +497,7 @@ def score_writing_process(request: WritingProcessRequest):
             "input_event_count": input_event_count,
             "words_per_minute": words_per_minute,
             "final_stability_ratio": final_stability_ratio,
+            "evidence_label": "Sin evidencia de proceso",
             "planning_score": 0,
             "monitoring_score": 0,
             "revision_score": 0,
@@ -502,7 +516,7 @@ def score_writing_process(request: WritingProcessRequest):
     monitoring_score = 85 if long_pause_count >= 3 else 65 if long_pause_count >= 1 else 35
 
     revision_events = deletion_count + local_adjustment_count + reduction_count
-    revision_score = 85 if revision_events >= 12 else 70 if revision_events >= 5 else 55 if revision_events >= 1 else 35
+    revision_score = 85 if revision_events >= 8 else 70 if revision_events >= 4 else 55 if revision_events >= 1 else 35
 
     reformulation_score = 85 if reformulation_count >= 3 else 70 if reformulation_count >= 1 else 35
 
@@ -517,15 +531,22 @@ def score_writing_process(request: WritingProcessRequest):
 
     recursivity_score = 85 if macro_adjustment_count >= 2 else 70 if macro_adjustment_count == 1 else 45
 
-    process_score = round(
+    process_score = (
         planning_score * 0.15 +
         monitoring_score * 0.20 +
         revision_score * 0.20 +
         reformulation_score * 0.15 +
         fluency_score * 0.15 +
-        recursivity_score * 0.15,
-        1
+        recursivity_score * 0.15
     )
+
+    # Penalización por baja evidencia textual/procesual.
+    if evidence_label == "Baja evidencia":
+        process_score *= 0.70
+    elif evidence_label == "Evidencia media":
+        process_score *= 0.90
+
+    process_score = round(process_score, 1)
 
     if process_score < 45:
         process_label = "Regulación baja"
@@ -537,6 +558,13 @@ def score_writing_process(request: WritingProcessRequest):
         process_label = "Regulación alta"
 
     parts = []
+
+    if evidence_label == "Baja evidencia":
+        parts.append("El nivel de evidencia del proceso es bajo; por lo tanto, la interpretación debe ser cautelosa.")
+    elif evidence_label == "Evidencia media":
+        parts.append("El nivel de evidencia del proceso es medio; la interpretación es útil, pero aún preliminar.")
+    else:
+        parts.append("El nivel de evidencia del proceso es alto para una primera interpretación.")
 
     if initial_latency < 2:
         parts.append("La latencia inicial fue baja, lo que sugiere inicio rápido de la escritura.")
@@ -581,6 +609,7 @@ def score_writing_process(request: WritingProcessRequest):
         "input_event_count": input_event_count,
         "words_per_minute": words_per_minute,
         "final_stability_ratio": final_stability_ratio,
+        "evidence_label": evidence_label,
         "planning_score": planning_score,
         "monitoring_score": monitoring_score,
         "revision_score": revision_score,
@@ -596,6 +625,7 @@ def score_writing_process(request: WritingProcessRequest):
 def integrated_writing_interpretation(product_metrics, process_metrics):
     product_label = product_metrics.get("level_label", "No determinado")
     process_label = process_metrics.get("process_regulation_label", "No determinado")
+    evidence_label = process_metrics.get("evidence_label", "No determinado")
     product_score = product_metrics.get("scores", {}).get("global_writing_score", 0)
     process_score = process_metrics.get("process_regulation_score", 0)
 
@@ -604,6 +634,13 @@ def integrated_writing_interpretation(product_metrics, process_metrics):
             f"El producto escrito se ubica preliminarmente en nivel {product_label}. "
             "Sin embargo, no existe trazabilidad suficiente para interpretar el proceso de escritura. "
             "La síntesis integrada queda limitada al análisis del producto textual."
+        )
+
+    if evidence_label == "Baja evidencia":
+        return (
+            f"El producto escrito se ubica preliminarmente en nivel {product_label}. "
+            f"El proceso aparece como {process_label}, pero con baja evidencia de trazabilidad. "
+            "La síntesis integrada debe interpretarse con cautela, especialmente si el texto es breve o la escritura registrada fue limitada."
         )
 
     if product_score < 50 and process_score < 50:
@@ -869,260 +906,52 @@ def flatten_dict(data, prefix=""):
 
 
 def build_variable_dictionary():
-    return [
-        {
-            "variable": "id",
-            "nombre_amigable": "ID del texto",
-            "modulo": "Corpus / Multitexto",
-            "dimension": "Identificación",
-            "descripcion": "Identificador del texto, sujeto o registro analizado.",
-            "como_se_calcula": "Asignado por el usuario o generado automáticamente.",
-            "tipo_valor": "Texto",
-            "rango_esperado": "Variable",
-            "interpretacion_general": "Permite vincular resultados con sujetos, textos o registros.",
-            "observaciones": "Clave para análisis por corpus."
-        },
-        {
-            "variable": "participant_id",
-            "nombre_amigable": "ID del participante",
-            "modulo": "Participante",
-            "dimension": "Identificación",
-            "descripcion": "Identificador asignado al participante.",
-            "como_se_calcula": "Ingresado por usuario o generado automáticamente.",
-            "tipo_valor": "Texto",
-            "rango_esperado": "Variable",
-            "interpretacion_general": "Permite vincular respuestas con participantes.",
-            "observaciones": "En investigación real debe definirse anonimización."
-        },
-        {
-            "variable": "submission_id",
-            "nombre_amigable": "ID del envío",
-            "modulo": "Participante",
-            "dimension": "Identificación",
-            "descripcion": "Identificador único de la respuesta enviada.",
-            "como_se_calcula": "UUID generado automáticamente.",
-            "tipo_valor": "Texto",
-            "rango_esperado": "Variable",
-            "interpretacion_general": "Permite rastrear cada envío.",
-            "observaciones": "Útil cuando un participante responde más de una tarea."
-        },
-        {
-            "variable": "analysis_id",
-            "nombre_amigable": "ID del análisis",
-            "modulo": "Metadatos",
-            "dimension": "Identificación",
-            "descripcion": "Identificador único del análisis realizado.",
-            "como_se_calcula": "UUID generado automáticamente.",
-            "tipo_valor": "Texto",
-            "rango_esperado": "Variable",
-            "interpretacion_general": "Permite rastrear cada análisis.",
-            "observaciones": "Útil para bases con múltiples sujetos."
-        },
-        {
-            "variable": "analysis_mode",
-            "nombre_amigable": "Línea de análisis",
-            "modulo": "Configuración",
-            "dimension": "Diseño analítico",
-            "descripcion": "Indica si el análisis corresponde a texto descriptivo, producto escrito o proceso escritural.",
-            "como_se_calcula": "Seleccionado por el investigador.",
-            "tipo_valor": "Texto",
-            "rango_esperado": "text_analysis / writing_product / writing_process",
-            "interpretacion_general": "Distingue análisis textual de evaluación escritural.",
-            "observaciones": "Clave para evitar mezclar texto y escritura."
-        },
-        {
-            "variable": "entry_mode",
-            "nombre_amigable": "Tipo de entrada",
-            "modulo": "Configuración",
-            "dimension": "Ingreso de datos",
-            "descripcion": "Indica si el dato fue ingresado como texto individual, multitexto, corpus Excel o proceso.",
-            "como_se_calcula": "Seleccionado por el investigador.",
-            "tipo_valor": "Texto",
-            "rango_esperado": "single_text / pasted_multi / corpus_excel / live_process",
-            "interpretacion_general": "Permite identificar la vía de ingreso.",
-            "observaciones": "No todos los modos aplican a todas las líneas de análisis."
-        },
-        {
-            "variable": "timestamp_utc",
-            "nombre_amigable": "Fecha y hora UTC",
-            "modulo": "Metadatos",
-            "dimension": "Trazabilidad",
-            "descripcion": "Fecha y hora de generación del análisis.",
-            "como_se_calcula": "datetime.utcnow().isoformat()",
-            "tipo_valor": "Fecha/hora",
-            "rango_esperado": "Variable",
-            "interpretacion_general": "Permite ordenar cronológicamente los análisis.",
-            "observaciones": "Está en horario UTC."
-        },
-        {
-            "variable": "texto_original",
-            "nombre_amigable": "Texto original",
-            "modulo": "Todos",
-            "dimension": "Entrada",
-            "descripcion": "Texto ingresado por el usuario o cargado desde corpus.",
-            "como_se_calcula": "Se conserva el texto enviado.",
-            "tipo_valor": "Texto",
-            "rango_esperado": "Variable",
-            "interpretacion_general": "Permite revisar manualmente el insumo.",
-            "observaciones": "Debe manejarse con cuidado si contiene información sensible."
-        },
-        {
-            "variable": "word_count",
-            "nombre_amigable": "Número de palabras",
-            "modulo": "Scriptora T / Scriptora W Producto",
-            "dimension": "Extensión",
-            "descripcion": "Cantidad total de palabras detectadas en el texto.",
-            "como_se_calcula": "Conteo de tokens después de limpieza básica.",
-            "tipo_valor": "Entero",
-            "rango_esperado": "0 en adelante",
-            "interpretacion_general": "Mayor extensión puede sugerir mayor desarrollo textual, aunque no implica necesariamente mejor calidad.",
-            "observaciones": "Debe interpretarse según nivel, tarea y género."
-        },
-        {
-            "variable": "char_count",
-            "nombre_amigable": "Número de caracteres",
-            "modulo": "Scriptora T",
-            "dimension": "Extensión",
-            "descripcion": "Cantidad total de caracteres del texto original.",
-            "como_se_calcula": "Conteo directo de caracteres del texto.",
-            "tipo_valor": "Entero",
-            "rango_esperado": "0 en adelante",
-            "interpretacion_general": "Permite estimar longitud bruta del texto.",
-            "observaciones": "Incluye espacios y signos."
-        },
-        {
-            "variable": "sentence_count",
-            "nombre_amigable": "Número de oraciones",
-            "modulo": "Scriptora T / Scriptora W Producto",
-            "dimension": "Estructura textual",
-            "descripcion": "Cantidad de unidades oracionales detectadas.",
-            "como_se_calcula": "Segmentación por signos de cierre.",
-            "tipo_valor": "Entero",
-            "rango_esperado": "0 en adelante",
-            "interpretacion_general": "Permite estimar organización básica y longitud oracional promedio.",
-            "observaciones": "La segmentación es preliminar."
-        },
-        {
-            "variable": "paragraph_count",
-            "nombre_amigable": "Número de párrafos",
-            "modulo": "Scriptora W Producto",
-            "dimension": "Organización",
-            "descripcion": "Cantidad de párrafos separados por saltos de línea.",
-            "como_se_calcula": "Conteo de bloques no vacíos separados por salto de línea.",
-            "tipo_valor": "Entero",
-            "rango_esperado": "0 en adelante",
-            "interpretacion_general": "Más de un párrafo puede reflejar mayor organización discursiva.",
-            "observaciones": "En textos breves puede no esperarse más de un párrafo."
-        },
-        {
-            "variable": "avg_sentence_length",
-            "nombre_amigable": "Longitud oracional promedio",
-            "modulo": "Scriptora T / Scriptora W Producto",
-            "dimension": "Sintaxis",
-            "descripcion": "Promedio de palabras por oración.",
-            "como_se_calcula": "word_count / sentence_count",
-            "tipo_valor": "Decimal",
-            "rango_esperado": "0 en adelante",
-            "interpretacion_general": "Valores bajos sugieren estructuras simples; valores altos pueden aumentar complejidad.",
-            "observaciones": "Debe interpretarse según edad, género y tarea."
-        },
-        {
-            "variable": "unique_words",
-            "nombre_amigable": "Palabras únicas",
-            "modulo": "Scriptora T / Scriptora W Producto",
-            "dimension": "Diversidad léxica",
-            "descripcion": "Cantidad de formas léxicas distintas.",
-            "como_se_calcula": "Conteo de tokens únicos.",
-            "tipo_valor": "Entero",
-            "rango_esperado": "0 en adelante",
-            "interpretacion_general": "Aporta información inicial sobre variedad léxica.",
-            "observaciones": "Depende de la extensión."
-        },
-        {
-            "variable": "type_token_ratio",
-            "nombre_amigable": "TTR",
-            "modulo": "Scriptora T / Scriptora W Producto",
-            "dimension": "Diversidad léxica",
-            "descripcion": "Proporción entre palabras únicas y total de palabras.",
-            "como_se_calcula": "unique_words / word_count",
-            "tipo_valor": "Decimal",
-            "rango_esperado": "0 a 1",
-            "interpretacion_general": "Valores más altos sugieren mayor diversidad léxica superficial.",
-            "observaciones": "En textos breves puede sobreestimar diversidad."
-        },
-        {
-            "variable": "lexical_density_proxy",
-            "nombre_amigable": "Densidad léxica estimada",
-            "modulo": "Scriptora T / Scriptora W Producto",
-            "dimension": "Densidad informativa",
-            "descripcion": "Proporción estimada de palabras de contenido.",
-            "como_se_calcula": "Palabras no funcionales / total de palabras.",
-            "tipo_valor": "Decimal",
-            "rango_esperado": "0 a 1",
-            "interpretacion_general": "Valores altos sugieren mayor concentración informativa.",
-            "observaciones": "Aproximación inicial."
-        },
-        {
-            "variable": "connector_count",
-            "nombre_amigable": "Conectores detectados",
-            "modulo": "Scriptora W Producto",
-            "dimension": "Cohesión",
-            "descripcion": "Cantidad de conectores discursivos reconocidos.",
-            "como_se_calcula": "Búsqueda en lista preliminar de conectores.",
-            "tipo_valor": "Entero",
-            "rango_esperado": "0 en adelante",
-            "interpretacion_general": "Más conectores pueden indicar mayor articulación discursiva.",
-            "observaciones": "No evalúa pertinencia semántica."
-        },
-        {
-            "variable": "scores_global_writing_score",
-            "nombre_amigable": "Puntaje global del producto escrito",
-            "modulo": "Scriptora W Producto",
-            "dimension": "Desempeño escritural",
-            "descripcion": "Índice sintético de calidad preliminar del texto final.",
-            "como_se_calcula": "Combinación ponderada de variables de producto.",
-            "tipo_valor": "Decimal",
-            "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores más altos sugieren mejor desempeño escritural preliminar.",
-            "observaciones": "Debe calibrarse con rúbricas humanas."
-        },
-        {
-            "variable": "level_label",
-            "nombre_amigable": "Nivel del producto",
-            "modulo": "Scriptora W Producto",
-            "dimension": "Desempeño escritural",
-            "descripcion": "Categoría interpretativa del producto escrito.",
-            "como_se_calcula": "Clasificación del puntaje global en rangos.",
-            "tipo_valor": "Texto",
-            "rango_esperado": "Inicial / En desarrollo / Adecuado / Avanzado",
-            "interpretacion_general": "Resume el desempeño escritural preliminar.",
-            "observaciones": "Los puntos de corte son prototípicos."
-        },
-        {
-            "variable": "interpretation_text",
-            "nombre_amigable": "Interpretación textual",
-            "modulo": "Scriptora T",
-            "dimension": "Interpretación",
-            "descripcion": "Comentario interpretativo descriptivo sobre el texto.",
-            "como_se_calcula": "Reglas interpretativas basadas en métricas textuales.",
-            "tipo_valor": "Texto",
-            "rango_esperado": "Variable",
-            "interpretacion_general": "Sintetiza características textuales.",
-            "observaciones": "No equivale a evaluación de escritura."
-        },
-        {
-            "variable": "interpretation_product",
-            "nombre_amigable": "Interpretación del producto escrito",
-            "modulo": "Scriptora W Producto",
-            "dimension": "Interpretación",
-            "descripcion": "Comentario interpretativo preliminar sobre el producto escrito.",
-            "como_se_calcula": "Reglas interpretativas basadas en métricas y puntajes.",
-            "tipo_valor": "Texto",
-            "rango_esperado": "Variable",
-            "interpretacion_general": "Sintetiza el resultado para lectura cualitativa.",
-            "observaciones": "Requiere validación empírica."
-        }
+    base = [
+        ("id", "ID del texto", "Corpus / Multitexto", "Identificación", "Identificador del texto, sujeto o registro analizado."),
+        ("participant_id", "ID del participante", "Participante", "Identificación", "Identificador asignado al participante."),
+        ("submission_id", "ID del envío", "Participante", "Identificación", "Identificador único de la respuesta enviada."),
+        ("analysis_id", "ID del análisis", "Metadatos", "Identificación", "Identificador único del análisis realizado."),
+        ("analysis_mode", "Línea de análisis", "Configuración", "Diseño analítico", "Indica si el análisis corresponde a texto descriptivo, producto escrito o proceso escritural."),
+        ("entry_mode", "Tipo de entrada", "Configuración", "Ingreso de datos", "Indica si el dato fue ingresado como texto individual, multitexto, corpus Excel o proceso."),
+        ("timestamp_utc", "Fecha y hora UTC", "Metadatos", "Trazabilidad", "Fecha y hora de generación del análisis."),
+        ("texto_original", "Texto original", "Todos", "Entrada", "Texto ingresado por el usuario o cargado desde corpus."),
+        ("word_count", "Número de palabras", "Scriptora T / Scriptora W", "Extensión", "Cantidad total de palabras detectadas en el texto."),
+        ("char_count", "Número de caracteres", "Scriptora T", "Extensión", "Cantidad total de caracteres del texto original."),
+        ("sentence_count", "Número de oraciones", "Scriptora T / Scriptora W", "Estructura textual", "Cantidad de unidades oracionales detectadas."),
+        ("paragraph_count", "Número de párrafos", "Scriptora W Producto", "Organización", "Cantidad de párrafos separados por saltos de línea."),
+        ("avg_sentence_length", "Longitud oracional promedio", "Scriptora T / Scriptora W", "Sintaxis", "Promedio de palabras por oración."),
+        ("unique_words", "Palabras únicas", "Scriptora T / Scriptora W", "Diversidad léxica", "Cantidad de formas léxicas distintas."),
+        ("type_token_ratio", "TTR", "Scriptora T / Scriptora W", "Diversidad léxica", "Proporción entre palabras únicas y total de palabras."),
+        ("lexical_density_proxy", "Densidad léxica estimada", "Scriptora T / Scriptora W", "Densidad informativa", "Proporción estimada de palabras de contenido."),
+        ("connector_count", "Conectores detectados", "Scriptora W Producto", "Cohesión", "Cantidad de conectores discursivos reconocidos."),
+        ("punctuation_count", "Marcas de puntuación", "Scriptora W Producto", "Control formal", "Cantidad de signos de puntuación detectados."),
+        ("closure_present", "Cierre textual", "Scriptora W Producto", "Cierre", "Indica si se detectó una marca explícita de cierre."),
+        ("scores_global_writing_score", "Puntaje global del producto escrito", "Scriptora W Producto", "Desempeño escritural", "Índice sintético de calidad preliminar del texto final."),
+        ("level_label", "Nivel del producto", "Scriptora W Producto", "Desempeño escritural", "Categoría interpretativa del producto escrito."),
+        ("evidence_label", "Nivel de evidencia", "Scriptora W Proceso", "Trazabilidad", "Nivel de evidencia disponible para interpretar el proceso."),
+        ("process_regulation_score", "Puntaje de regulación del proceso", "Scriptora W Proceso", "Regulación", "Índice preliminar de regulación escritural."),
+        ("process_regulation_label", "Nivel de regulación", "Scriptora W Proceso", "Regulación", "Categoría interpretativa del proceso escritural."),
+        ("interpretation_text", "Interpretación textual", "Scriptora T", "Interpretación", "Comentario interpretativo descriptivo sobre el texto."),
+        ("interpretation_product", "Interpretación del producto escrito", "Scriptora W Producto", "Interpretación", "Comentario interpretativo preliminar sobre el producto escrito."),
+        ("interpretation_process", "Interpretación del proceso", "Scriptora W Proceso", "Interpretación", "Comentario interpretativo preliminar sobre proceso escritural."),
+        ("integrated_interpretation", "Síntesis integrada", "Scriptora W Proceso", "Interpretación", "Síntesis entre producto textual y proceso escritural.")
     ]
+
+    rows = []
+    for variable, friendly, module, dimension, description in base:
+        rows.append({
+            "variable": variable,
+            "nombre_amigable": friendly,
+            "modulo": module,
+            "dimension": dimension,
+            "descripcion": description,
+            "como_se_calcula": "Regla heurística preliminar de Scriptora.",
+            "tipo_valor": "Texto / número",
+            "rango_esperado": "Variable",
+            "interpretacion_general": "Debe interpretarse según tarea, nivel, género y corpus.",
+            "observaciones": "Versión exploratoria; requiere calibración empírica."
+        })
+    return rows
 
 
 def autosize_columns(ws):
@@ -1322,7 +1151,7 @@ def create_multi_analysis_excel(rows, metadata):
 
 def create_participant_excel():
     metadata = {
-        "scriptora_version": "0.9.3",
+        "scriptora_version": SCRIPTORA_VERSION,
         "timestamp_utc": datetime.utcnow().isoformat(),
         "total_respuestas": len(PARTICIPANT_SUBMISSIONS),
         "advertencia_metodologica": "Registro temporal en memoria. En Render puede perderse si el servicio se reinicia.",
@@ -1338,11 +1167,11 @@ def create_participant_excel():
 
 def create_corpus_excel(rows, analysis_mode):
     metadata = {
-        "scriptora_version": "0.9.3",
+        "scriptora_version": SCRIPTORA_VERSION,
         "timestamp_utc": datetime.utcnow().isoformat(),
         "total_textos": len(rows),
         "analysis_mode": analysis_mode,
-        "archivo_generado": "scriptora_corpus_resultados_v0_9_3.xlsx",
+        "archivo_generado": f"scriptora_corpus_resultados_v{SCRIPTORA_VERSION}.xlsx",
         "formato_entrada": "Excel con columna obligatoria texto o text. Columnas opcionales: id, grupo, nivel, genero, observaciones.",
         "hoja_matriz_corpus": "Una fila por texto procesado, conservando columnas originales más variables Scriptora.",
         "advertencia_metodologica": "Resultados preliminares; requieren calibración con corpus reales, rúbricas humanas y benchmarks contextuales."
@@ -1361,32 +1190,32 @@ def create_corpus_excel(rows, analysis_mode):
 
 @app.get("/", response_class=HTMLResponse)
 def home():
-    return """
+    return f"""
 <!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
     <title>Scriptora Suite</title>
     <style>
-        body {
+        body {{
             font-family: Arial, sans-serif;
             background: #f7f7fb;
             margin: 0;
             padding: 40px;
             color: #222;
-        }
-        .container {
+        }}
+        .container {{
             max-width: 1040px;
             margin: auto;
             background: white;
             padding: 30px;
             border-radius: 18px;
             box-shadow: 0 8px 30px rgba(0,0,0,0.08);
-        }
-        h1 { margin-bottom: 5px; font-size: 34px; }
-        h2 { margin-top: 0; }
-        .subtitle { color: #666; margin-bottom: 25px; }
-        textarea, select, button, input {
+        }}
+        h1 {{ margin-bottom: 5px; font-size: 34px; }}
+        h2 {{ margin-top: 0; }}
+        .subtitle {{ color: #666; margin-bottom: 25px; }}
+        textarea, select, button, input {{
             width: 100%;
             margin-top: 10px;
             margin-bottom: 15px;
@@ -1395,65 +1224,65 @@ def home():
             border-radius: 10px;
             border: 1px solid #ccc;
             box-sizing: border-box;
-        }
-        textarea { height: 210px; }
-        button {
+        }}
+        textarea {{ height: 210px; }}
+        button {{
             background: #111827;
             color: white;
             cursor: pointer;
             border: none;
             font-weight: bold;
-        }
-        button:hover { background: #374151; }
-        .secondary { background: #6b7280; }
-        .secondary:hover { background: #4b5563; }
-        .success {
+        }}
+        button:hover {{ background: #374151; }}
+        .secondary {{ background: #6b7280; }}
+        .secondary:hover {{ background: #4b5563; }}
+        .success {{
             background: #ecfdf5;
             border: 1px solid #a7f3d0;
             padding: 20px;
             border-radius: 14px;
             display: none;
             margin-top: 20px;
-        }
-        .result {
+        }}
+        .result {{
             margin-top: 25px;
             padding: 20px;
             background: #f0f4ff;
             border-radius: 14px;
             display: none;
-        }
-        .metric {
+        }}
+        .metric {{
             padding: 8px 0;
             border-bottom: 1px solid #ddd;
-        }
-        .score-box {
+        }}
+        .score-box {{
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
             gap: 12px;
             margin-top: 10px;
-        }
-        .score {
+        }}
+        .score {{
             background: white;
             padding: 14px;
             border-radius: 12px;
             border: 1px solid #d8def5;
-        }
-        .score strong {
+        }}
+        .score strong {{
             display: block;
             font-size: 14px;
             color: #374151;
-        }
-        .score span {
+        }}
+        .score span {{
             font-size: 22px;
             font-weight: bold;
-        }
-        .note {
+        }}
+        .note {{
             margin-top: 12px;
             font-size: 13px;
             color: #666;
             line-height: 1.4;
-        }
-        .pill {
+        }}
+        .pill {{
             display: inline-block;
             padding: 6px 10px;
             border-radius: 999px;
@@ -1461,89 +1290,99 @@ def home():
             color: white;
             font-size: 13px;
             margin-bottom: 10px;
-        }
-        .process-panel {
+        }}
+        .evidence-pill {{
+            display: inline-block;
+            padding: 7px 11px;
+            border-radius: 999px;
+            background: #fef3c7;
+            color: #92400e;
+            font-size: 13px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }}
+        .process-panel {{
             background: #eef2ff;
             border: 1px solid #c7d2fe;
             padding: 15px;
             border-radius: 12px;
             margin-bottom: 15px;
             font-size: 14px;
-        }
-        .small-grid {
+        }}
+        .small-grid {{
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
             gap: 8px;
             margin-top: 8px;
-        }
-        .small-box {
+        }}
+        .small-box {{
             background: white;
             border-radius: 10px;
             padding: 8px;
             border: 1px solid #d8def5;
-        }
-        .help {
+        }}
+        .help {{
             font-size: 13px;
             color: #555;
             margin-top: -8px;
             margin-bottom: 12px;
             line-height: 1.4;
-        }
-        .role-grid {
+        }}
+        .role-grid {{
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
             gap: 20px;
             margin-top: 20px;
-        }
-        .role-card {
+        }}
+        .role-card {{
             border: 1px solid #d1d5db;
             background: #f9fafb;
             padding: 22px;
             border-radius: 16px;
-        }
-        .role-card h3 { margin-top: 0; }
-        .hidden { display: none; }
-        .topbar {
+        }}
+        .role-card h3 {{ margin-top: 0; }}
+        .hidden {{ display: none; }}
+        .topbar {{
             display: flex;
             gap: 10px;
             justify-content: space-between;
             align-items: center;
             margin-bottom: 18px;
-        }
-        .topbar button {
+        }}
+        .topbar button {{
             width: auto;
             padding: 10px 16px;
             margin: 0;
-        }
-        .task-box {
+        }}
+        .task-box {{
             background: #f9fafb;
             border: 1px solid #e5e7eb;
             padding: 18px;
             border-radius: 14px;
             margin-bottom: 18px;
-        }
-        .admin-box {
+        }}
+        .admin-box {{
             background: #fff7ed;
             border: 1px solid #fed7aa;
             padding: 15px;
             border-radius: 12px;
             margin-bottom: 15px;
-        }
-        .corpus-box {
+        }}
+        .corpus-box {{
             background: #f0fdf4;
             border: 1px solid #bbf7d0;
             padding: 15px;
             border-radius: 12px;
             margin-bottom: 15px;
-        }
-        .config-box {
+        }}
+        .config-box {{
             background: #f8fafc;
             border: 1px solid #dbe3ef;
             padding: 15px;
             border-radius: 12px;
             margin-bottom: 15px;
-        }
-        .format-box {
+        }}
+        .format-box {{
             background: white;
             border: 1px dashed #94a3b8;
             padding: 12px;
@@ -1553,7 +1392,7 @@ def home():
             margin-top: 10px;
             line-height: 1.5;
             overflow-x: auto;
-        }
+        }}
     </style>
 </head>
 <body>
@@ -1561,7 +1400,7 @@ def home():
 
     <div id="roleScreen">
         <h1>Scriptora</h1>
-        <div class="subtitle">Plataforma para análisis textual, evaluación escritural y proceso de escritura · v0.9.3</div>
+        <div class="subtitle">Plataforma para análisis textual, evaluación escritural y proceso de escritura · v{SCRIPTORA_VERSION}</div>
 
         <div class="role-grid">
             <div class="role-card">
@@ -1676,16 +1515,17 @@ sujeto_002 | Texto del sujeto... | grupo_B | universitario | expositivo | postes
                 <div class="small-box">Tiempo: <span id="timer">0</span> s</div>
                 <div class="small-box">Latencia inicial: <span id="latency">0</span> s</div>
                 <div class="small-box">Pausas largas: <span id="longPauses">0</span></div>
-                <div class="small-box">Ediciones: <span id="edits">0</span></div>
-                <div class="small-box">Inserciones: <span id="insertions">0</span></div>
-                <div class="small-box">Borrados: <span id="deletions">0</span></div>
+                <div class="small-box">Ediciones significativas: <span id="edits">0</span></div>
+                <div class="small-box">Inserciones reales: <span id="insertions">0</span></div>
+                <div class="small-box">Borrados reales: <span id="deletions">0</span></div>
                 <div class="small-box">Ajustes locales: <span id="localAdjustments">0</span></div>
                 <div class="small-box">Reformulaciones: <span id="reformulations">0</span></div>
                 <div class="small-box">Expansiones: <span id="expansions">0</span></div>
                 <div class="small-box">Reducciones: <span id="reductions">0</span></div>
                 <div class="small-box">Ajustes macro: <span id="macroAdjustments">0</span></div>
-                <div class="small-box">Eventos: <span id="events">0</span></div>
+                <div class="small-box">Eventos mecánicos: <span id="events">0</span></div>
             </div>
+            <div class="note">v0.9.4 separa eventos mecánicos de eventos interpretables. No cada tecla cuenta como regulación cognitiva.</div>
         </div>
 
         <div id="textSection">
@@ -1723,6 +1563,7 @@ sujeto_002 | Texto del sujeto... | grupo_B | universitario | expositivo | postes
 
         <div id="result" class="result">
             <div id="moduleLabel" class="pill"></div>
+            <div id="evidenceLabel" class="evidence-pill" style="display:none;"></div>
             <h2>Resultado preliminar</h2>
 
             <h3 id="productTitle">Producto textual</h3>
@@ -1779,41 +1620,42 @@ let maxTextLength = 0;
 let previousParagraphCount = 0;
 
 const LONG_PAUSE_THRESHOLD_MS = 3000;
-const REFORMULATION_DELTA = 25;
+const SIGNIFICANT_EDIT_DELTA = 5;
+const REFORMULATION_DELTA = 20;
 
-function enterParticipant() {
+function enterParticipant() {{
     document.getElementById("roleScreen").classList.add("hidden");
     document.getElementById("participantScreen").classList.remove("hidden");
     document.getElementById("researcherScreen").classList.add("hidden");
     document.getElementById("participantConfirmation").style.display = "none";
-}
+}}
 
-function enterResearcher() {
+function enterResearcher() {{
     document.getElementById("roleScreen").classList.add("hidden");
     document.getElementById("participantScreen").classList.add("hidden");
     document.getElementById("researcherScreen").classList.remove("hidden");
     updateResearcherInterface();
-}
+}}
 
-function goHome() {
+function goHome() {{
     document.getElementById("roleScreen").classList.remove("hidden");
     document.getElementById("participantScreen").classList.add("hidden");
     document.getElementById("researcherScreen").classList.add("hidden");
-}
+}}
 
-async function submitParticipantResponse() {
+async function submitParticipantResponse() {{
     const text = document.getElementById("participantText").value;
     const participantId = document.getElementById("participantId").value;
 
-    if (!text.trim()) {
+    if (!text.trim()) {{
         alert("Por favor escribe una respuesta antes de enviar.");
         return;
-    }
+    }}
 
-    const response = await fetch("/api/participant/submit", {
+    const response = await fetch("/api/participant/submit", {{
         method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({
+        headers: {{"Content-Type": "application/json"}},
+        body: JSON.stringify({{
             participant_id: participantId,
             text: text,
             language: "es",
@@ -1821,76 +1663,76 @@ async function submitParticipantResponse() {
             genre: "argumentativo",
             task: "participant_writing_task",
             purpose: "silent_participant_submission"
-        })
-    });
+        }})
+    }});
 
-    if (!response.ok) {
+    if (!response.ok) {{
         alert("No se pudo registrar la respuesta.");
         return;
-    }
+    }}
 
     document.getElementById("participantText").value = "";
     document.getElementById("participantConfirmation").style.display = "block";
-}
+}}
 
-async function downloadParticipantExcel() {
-    const response = await fetch("/api/participant/export-excel", {
+async function downloadParticipantExcel() {{
+    const response = await fetch("/api/participant/export-excel", {{
         method: "GET"
-    });
+    }});
 
-    if (!response.ok) {
+    if (!response.ok) {{
         alert("No se pudo generar el Excel de participantes.");
         return;
-    }
+    }}
 
     const blob = await response.blob();
-    downloadBlob(blob, "scriptora_respuestas_participantes_v0_9_3.xlsx");
-}
+    downloadBlob(blob, "scriptora_respuestas_participantes_v{SCRIPTORA_VERSION}.xlsx");
+}}
 
-async function clearParticipantRecords() {
+async function clearParticipantRecords() {{
     const ok = confirm("¿Seguro que quieres limpiar los registros temporales de participantes?");
     if (!ok) return;
 
-    const response = await fetch("/api/participant/clear", {
+    const response = await fetch("/api/participant/clear", {{
         method: "POST"
-    });
+    }});
 
-    if (response.ok) {
+    if (response.ok) {{
         alert("Registros temporales eliminados.");
-    } else {
+    }} else {{
         alert("No se pudieron limpiar los registros.");
-    }
-}
+    }}
+}}
 
-async function uploadCorpusExcel() {
+async function uploadCorpusExcel() {{
     const fileInput = document.getElementById("corpusFile");
     const analysisMode = document.getElementById("analysisMode").value;
 
-    if (!fileInput.files || fileInput.files.length === 0) {
+    if (!fileInput.files || fileInput.files.length === 0) {{
         alert("Por favor selecciona un archivo Excel .xlsx.");
         return;
-    }
+    }}
 
     const formData = new FormData();
     formData.append("file", fileInput.files[0]);
     formData.append("analysis_mode", analysisMode);
 
-    const response = await fetch("/api/corpus/upload-excel", {
+    const response = await fetch("/api/corpus/upload-excel", {{
         method: "POST",
         body: formData
-    });
+    }});
 
-    if (!response.ok) {
+    if (!response.ok) {{
         const msg = await response.text();
         alert("No se pudo procesar el corpus Excel. Revisa que exista una columna llamada texto. Detalle: " + msg);
         return;
-    }
+    }}
 
     const blob = await response.blob();
-    downloadBlob(blob, "scriptora_corpus_resultados_v0_9_3.xlsx");
-}
+    downloadBlob(blob, "scriptora_corpus_resultados_v{SCRIPTORA_VERSION}.xlsx");
+}}
 
-function downloadBlob(blob, filename) {
+function downloadBlob(blob, filename) {{
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -1899,45 +1741,45 @@ function downloadBlob(blob, filename) {
     a.click();
     a.remove();
     window.URL.revokeObjectURL(url);
-}
+}}
 
-function currentAnalysisMode() {
+function currentAnalysisMode() {{
     return document.getElementById("analysisMode").value;
-}
+}}
 
-function currentEntryMode() {
+function currentEntryMode() {{
     return document.getElementById("entryMode").value;
-}
+}}
 
-function isProcessMode() {
+function isProcessMode() {{
     return currentAnalysisMode() === "writing_process" && currentEntryMode() === "live_process";
-}
+}}
 
-function isMultiMode() {
+function isMultiMode() {{
     return currentEntryMode() === "pasted_multi";
-}
+}}
 
-function isCorpusMode() {
+function isCorpusMode() {{
     return currentEntryMode() === "corpus_excel";
-}
+}}
 
-function updateResearcherInterface() {
+function updateResearcherInterface() {{
     const analysisMode = currentAnalysisMode();
     const entryModeSelect = document.getElementById("entryMode");
 
-    if (analysisMode === "writing_process") {
+    if (analysisMode === "writing_process") {{
         entryModeSelect.value = "live_process";
-        for (const option of entryModeSelect.options) {
+        for (const option of entryModeSelect.options) {{
             option.disabled = option.value !== "live_process";
-        }
-    } else {
-        for (const option of entryModeSelect.options) {
-            option.disabled = option.value === "live_process";
-        }
-        if (entryModeSelect.value === "live_process") {
+        }}
+    }} else {{
+        for (const option of entryModeSelect.options) {{
+            option.disabled = false;
+        }}
+        if (entryModeSelect.value === "live_process") {{
             entryModeSelect.value = "single_text";
-        }
-    }
+        }}
+    }}
 
     const entryMode = currentEntryMode();
 
@@ -1947,56 +1789,53 @@ function updateResearcherInterface() {
     document.getElementById("actionSection").classList.toggle("hidden", entryMode === "corpus_excel");
     document.getElementById("processPanel").classList.toggle("hidden", !isProcessMode());
 
-    if (!isProcessMode()) {
-        resetOnlyProcessCounters();
-    }
+    const textInput = document.getElementById("textInput");
+    const textLabel = document.getElementById("textLabel");
+    const modeHelp = document.getElementById("modeHelp");
+    const configHelp = document.getElementById("configHelp");
 
-    let configHelp = "";
-    let modeHelp = "";
-    let textLabel = "Texto a analizar";
-    let levelLabel = "Nivel / audiencia objetivo";
-    let genreLabel = "Tipo de texto";
-
-    if (analysisMode === "text_analysis") {
-        configHelp = "Scriptora T describe el texto como objeto lingüístico. No entrega evaluación de desempeño escritural.";
-    } else if (analysisMode === "writing_product") {
-        configHelp = "Scriptora W evalúa el texto como producto escrito: organización, cohesión, elaboración, género y nivel preliminar.";
-    } else {
-        configHelp = "Scriptora W captura el proceso de escritura en vivo y relaciona producto final con señales de regulación escritural.";
-    }
-
-    if (entryMode === "single_text") {
-        modeHelp = "Modo individual: pega o escribe un texto. Los selectores de nivel y género se aplican a este texto.";
-    } else if (entryMode === "pasted_multi") {
-        modeHelp = `
-            Modo multitexto pegado. Usa este formato:<br>
-            ### ID: sujeto_001<br>
-            Texto del sujeto 001...<br><br>
-            ### ID: sujeto_002<br>
-            Texto del sujeto 002...<br><br>
-            También puedes separar textos con una línea que contenga solo ---.<br>
-            Los selectores de nivel y género se aplican como valores comunes para todos los textos.
-        `;
-        textLabel = "Multitexto a analizar";
-        levelLabel = "Nivel común para todos los textos";
-        genreLabel = "Tipo de texto común para todos los textos";
-    } else if (entryMode === "corpus_excel") {
-        configHelp += " En corpus Excel, si existen columnas nivel y genero, esos valores tienen prioridad por fila.";
-    } else if (entryMode === "live_process") {
-        modeHelp = "Modo proceso: escribe en vivo para capturar tiempo, pausas, ediciones y señales preliminares de regulación.";
-        textLabel = "Texto escrito en vivo";
-    }
-
-    document.getElementById("configHelp").innerText = configHelp;
-    document.getElementById("modeHelp").innerHTML = modeHelp;
-    document.getElementById("textLabel").innerText = textLabel;
-    document.getElementById("levelLabel").innerText = levelLabel;
-    document.getElementById("genreLabel").innerText = genreLabel;
+    if (entryMode === "pasted_multi") {{
+        textLabel.innerText = "Multitexto pegado";
+        textInput.placeholder = "Formato recomendado:\\n### ID: sujeto_001\\nTexto del sujeto...\\n\\n### ID: sujeto_002\\nTexto del sujeto...\\n\\nTambién puedes separar textos con una línea ---";
+        modeHelp.innerHTML = "Modo multitexto: procesa varios textos pegados. Formato recomendado: <strong>### ID: sujeto_001</strong> seguido del texto.";
+        configHelp.innerText = "El análisis multitexto genera resultados por cada texto y permite exportar una matriz en Excel.";
+    }} else if (entryMode === "live_process") {{
+        textLabel.innerText = "Texto escrito en vivo";
+        textInput.placeholder = "Escribe aquí para capturar tiempo, pausas y señales preliminares de regulación...";
+        modeHelp.innerHTML = "Modo proceso: escribe en vivo para capturar tiempo, pausas, eventos mecánicos y cambios significativos.";
+        configHelp.innerText = "Scriptora W captura el proceso de escritura en vivo y relaciona producto final con señales de regulación escritural.";
+    }} else {{
+        textLabel.innerText = "Texto a analizar";
+        textInput.placeholder = "Escribe aquí o pega un texto para analizar...";
+        modeHelp.innerHTML = "";
+        configHelp.innerText = "Selecciona la línea de análisis y el tipo de entrada.";
+    }}
 
     document.getElementById("result").style.display = "none";
-}
+}}
 
-function resetOnlyProcessCounters() {
+function updateTimer() {{
+    if (!sessionStarted || !startTime || processClosed) return;
+
+    finalTotalTimeSeconds = Math.round((Date.now() - startTime) / 1000);
+    document.getElementById("timer").innerText = finalTotalTimeSeconds;
+    document.getElementById("latency").innerText = finalInitialLatencySeconds;
+}}
+
+function updateProcessPanel() {{
+    document.getElementById("longPauses").innerText = longPauseCount;
+    document.getElementById("edits").innerText = editCount;
+    document.getElementById("insertions").innerText = insertionCount;
+    document.getElementById("deletions").innerText = deletionCount;
+    document.getElementById("localAdjustments").innerText = localAdjustmentCount;
+    document.getElementById("reformulations").innerText = reformulationCount;
+    document.getElementById("expansions").innerText = expansionCount;
+    document.getElementById("reductions").innerText = reductionCount;
+    document.getElementById("macroAdjustments").innerText = macroAdjustmentCount;
+    document.getElementById("events").innerText = inputEventCount;
+}}
+
+function resetProcessCapture() {{
     sessionStarted = false;
     writingStarted = false;
     processClosed = false;
@@ -2004,6 +1843,11 @@ function resetOnlyProcessCounters() {
     startTime = null;
     firstInputTime = null;
     lastInputTime = null;
+
+    if (timerInterval) {{
+        clearInterval(timerInterval);
+        timerInterval = null;
+    }}
 
     finalTotalTimeSeconds = 0;
     finalInitialLatencySeconds = 0;
@@ -2019,462 +1863,127 @@ function resetOnlyProcessCounters() {
     macroAdjustmentCount = 0;
     inputEventCount = 0;
 
-    previousText = "";
-    maxTextLength = 0;
-    previousParagraphCount = 0;
+    previousText = document.getElementById("textInput").value || "";
+    maxTextLength = previousText.length;
+    previousParagraphCount = previousText.split("\\n").filter(p => p.trim()).length;
 
-    if (timerInterval) {
-        clearInterval(timerInterval);
-        timerInterval = null;
-    }
+    document.getElementById("timer").innerText = "0";
+    document.getElementById("latency").innerText = "0";
+    updateProcessPanel();
+}}
 
-    updatePanel();
-}
+function closeProcessCapture() {{
+    if (isProcessMode() && sessionStarted && !processClosed) {{
+        processClosed = true;
+        finalTotalTimeSeconds = Math.round((Date.now() - startTime) / 1000);
+        if (timerInterval) clearInterval(timerInterval);
+    }}
+}}
 
-function startSessionIfNeeded() {
-    if (!isProcessMode()) return;
+document.addEventListener("DOMContentLoaded", () => {{
+    const textInput = document.getElementById("textInput");
 
-    if (!sessionStarted && !processClosed) {
-        sessionStarted = true;
-        startTime = Date.now();
-        timerInterval = setInterval(updateTimer, 1000);
-    }
-}
+    textInput.addEventListener("input", () => {{
+        if (!isProcessMode()) {{
+            previousText = textInput.value;
+            maxTextLength = Math.max(maxTextLength, previousText.length);
+            previousParagraphCount = previousText.split("\\n").filter(p => p.trim()).length;
+            return;
+        }}
 
-function updateTimer() {
-    if (startTime && !processClosed && isProcessMode()) {
-        const seconds = Math.floor((Date.now() - startTime) / 1000);
-        document.getElementById("timer").innerText = seconds;
-    }
-}
-
-function paragraphCount(text) {
-    return text.split("\\n").filter(p => p.trim().length > 0).length;
-}
-
-function updatePanel() {
-    const now = Date.now();
-    const totalTimeSeconds = processClosed ? finalTotalTimeSeconds : (startTime ? Math.floor((now - startTime) / 1000) : 0);
-    const latencySeconds = processClosed ? finalInitialLatencySeconds : (firstInputTime && startTime ? Math.floor((firstInputTime - startTime) / 1000) : 0);
-
-    document.getElementById("timer").innerText = totalTimeSeconds;
-    document.getElementById("latency").innerText = latencySeconds;
-    document.getElementById("longPauses").innerText = longPauseCount;
-    document.getElementById("edits").innerText = editCount;
-    document.getElementById("insertions").innerText = insertionCount;
-    document.getElementById("deletions").innerText = deletionCount;
-    document.getElementById("localAdjustments").innerText = localAdjustmentCount;
-    document.getElementById("reformulations").innerText = reformulationCount;
-    document.getElementById("expansions").innerText = expansionCount;
-    document.getElementById("reductions").innerText = reductionCount;
-    document.getElementById("macroAdjustments").innerText = macroAdjustmentCount;
-    document.getElementById("events").innerText = inputEventCount;
-}
-
-document.addEventListener("DOMContentLoaded", function() {
-    const textarea = document.getElementById("textInput");
-
-    textarea.addEventListener("focus", function() {
-        if (isProcessMode()) {
-            startSessionIfNeeded();
-        }
-    });
-
-    textarea.addEventListener("paste", function() {
-        if (isProcessMode()) {
-            alert("Para capturar proceso, escribe en vivo. Si pegas texto, el proceso no será trazable.");
-        }
-    });
-
-    textarea.addEventListener("input", function() {
-        if (!isProcessMode()) return;
-        if (processClosed) return;
-
-        startSessionIfNeeded();
-
+        const currentText = textInput.value;
+        const currentLength = currentText.length;
+        const previousLength = previousText.length;
         const now = Date.now();
-        const currentText = textarea.value;
-        const currentParagraphCount = paragraphCount(currentText);
 
-        if (!writingStarted) {
+        if (!sessionStarted) {{
+            sessionStarted = true;
+            startTime = now;
+            lastInputTime = now;
+            previousParagraphCount = previousText.split("\\n").filter(p => p.trim()).length;
+            timerInterval = setInterval(updateTimer, 1000);
+        }}
+
+        if (!writingStarted) {{
             writingStarted = true;
             firstInputTime = now;
-            previousParagraphCount = currentParagraphCount;
-        }
+            finalInitialLatencySeconds = Math.round((firstInputTime - startTime) / 1000);
+        }}
 
-        if (lastInputTime) {
-            const gap = now - lastInputTime;
-            if (gap >= LONG_PAUSE_THRESHOLD_MS) {
-                longPauseCount += 1;
-            }
-        }
+        if (lastInputTime) {{
+            const pauseDelta = now - lastInputTime;
+            if (pauseDelta > LONG_PAUSE_THRESHOLD_MS) {{
+                longPauseCount++;
+            }}
+        }}
 
-        inputEventCount += 1;
+        lastInputTime = now;
+        inputEventCount++;
 
-        const delta = currentText.length - previousText.length;
+        const deltaLength = currentLength - previousLength;
+        const absDelta = Math.abs(deltaLength);
 
-        if (delta > 0) {
-            insertionCount += delta;
-            editCount += 1;
-            expansionCount += 1;
+        // Eventos interpretables: no cada tecla equivale a evento cognitivo.
+        if (deltaLength > 1) {{
+            insertionCount++;
+            expansionCount++;
+        }}
 
-            if (delta <= 15) localAdjustmentCount += 1;
-            if (delta >= REFORMULATION_DELTA) reformulationCount += 1;
-        }
+        if (deltaLength < 0) {{
+            deletionCount++;
+            reductionCount++;
+        }}
 
-        if (delta < 0) {
-            const absDelta = Math.abs(delta);
-            deletionCount += absDelta;
-            editCount += 1;
-            reductionCount += 1;
+        if (absDelta > SIGNIFICANT_EDIT_DELTA) {{
+            editCount++;
+            localAdjustmentCount++;
+        }}
 
-            if (absDelta <= 15) localAdjustmentCount += 1;
-            if (absDelta >= REFORMULATION_DELTA) reformulationCount += 1;
-        }
+        if (absDelta > REFORMULATION_DELTA) {{
+            reformulationCount++;
+        }}
 
-        if (currentParagraphCount !== previousParagraphCount && inputEventCount > 1) {
-            macroAdjustmentCount += 1;
-        }
+        const paragraphCount = currentText.split("\\n").filter(p => p.trim()).length;
+        if (paragraphCount !== previousParagraphCount && inputEventCount > 1) {{
+            macroAdjustmentCount++;
+        }}
 
-        if (currentText.length > maxTextLength) {
-            maxTextLength = currentText.length;
-        }
+        previousParagraphCount = paragraphCount;
+
+        if (currentLength > maxTextLength) {{
+            maxTextLength = currentLength;
+        }}
 
         previousText = currentText;
-        previousParagraphCount = currentParagraphCount;
-        lastInputTime = now;
+        updateProcessPanel();
+        updateTimer();
+    }});
 
-        updatePanel();
-    });
-
+    resetProcessCapture();
     updateResearcherInterface();
-});
+}});
 
-function freezeProcess() {
-    if (!isProcessMode()) {
-        resetOnlyProcessCounters();
-        return;
-    }
-
-    const now = Date.now();
-
-    finalTotalTimeSeconds = startTime ? Math.floor((now - startTime) / 1000) : 0;
-    finalInitialLatencySeconds = firstInputTime && startTime ? Math.floor((firstInputTime - startTime) / 1000) : 0;
-
-    processClosed = true;
-
-    if (timerInterval) {
-        clearInterval(timerInterval);
-        timerInterval = null;
-    }
-
-    updatePanel();
-}
-
-function resetProcessCapture() {
-    resetOnlyProcessCounters();
-    document.getElementById("textInput").value = "";
-    document.getElementById("result").style.display = "none";
-}
-
-async function runScriptora() {
-    const analysisMode = currentAnalysisMode();
-    const entryMode = currentEntryMode();
+function basePayload() {{
     const text = document.getElementById("textInput").value;
     const level = document.getElementById("level").value;
     const genre = document.getElementById("genre").value;
 
-    if (!text.trim()) {
-        alert("Por favor escribe o pega texto antes de analizar.");
-        return;
-    }
-
-    document.getElementById("result").style.display = "block";
-    document.getElementById("processSectionResult").style.display = "none";
-    document.getElementById("integratedSection").style.display = "none";
-
-    if (entryMode === "pasted_multi") {
-        const response = await fetch("/api/multi/analyze", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({
-                raw_input: text,
-                analysis_mode: analysisMode,
-                language: "es",
-                level: level,
-                genre: genre,
-                purpose: "multitext_analysis"
-            })
-        });
-
-        const data = await response.json();
-
-        document.getElementById("moduleLabel").innerText = data.module;
-        document.getElementById("productTitle").innerText = "Resultado multitexto";
-        document.getElementById("metrics").innerHTML = `
-            <div class="metric"><strong>Textos procesados:</strong> ${data.total_texts}</div>
-            <div class="metric"><strong>Línea de análisis:</strong> ${analysisMode}</div>
-        `;
-
-        document.getElementById("scores").innerHTML = renderMultiPreview(data.results);
-        document.getElementById("interpretation").innerText = "Análisis multitexto completado. Descarga el Excel para revisar la matriz completa por texto.";
-        return;
-    }
-
-    if (analysisMode === "text_analysis") {
-        const response = await fetch("/api/text/analyze", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({
-                text: text,
-                language: "es",
-                context: "scriptora_suite",
-                level: level,
-                genre: genre,
-                purpose: "text_analysis"
-            })
-        });
-
-        const data = await response.json();
-        const metrics = data.raw_metrics;
-
-        document.getElementById("moduleLabel").innerText = data.module;
-        document.getElementById("productTitle").innerText = "Análisis textual descriptivo";
-
-        document.getElementById("metrics").innerHTML = `
-            <div class="metric"><strong>Palabras:</strong> ${metrics.word_count}</div>
-            <div class="metric"><strong>Caracteres:</strong> ${metrics.char_count}</div>
-            <div class="metric"><strong>Oraciones:</strong> ${metrics.sentence_count}</div>
-            <div class="metric"><strong>Palabras únicas:</strong> ${metrics.unique_words}</div>
-            <div class="metric"><strong>Longitud oracional promedio:</strong> ${metrics.avg_sentence_length}</div>
-            <div class="metric"><strong>TTR:</strong> ${metrics.type_token_ratio}</div>
-            <div class="metric"><strong>Densidad léxica estimada:</strong> ${metrics.lexical_density_proxy}</div>
-        `;
-
-        document.getElementById("scores").innerHTML = "";
-        document.getElementById("interpretation").innerText = data.interpretation;
-        return;
-    }
-
-    if (analysisMode === "writing_product") {
-        const response = await fetch("/api/write/evaluate", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({
-                text: text,
-                language: "es",
-                level: level,
-                genre: genre,
-                task: "open_writing_task",
-                purpose: "writing_product_evaluation"
-            })
-        });
-
-        const data = await response.json();
-        document.getElementById("moduleLabel").innerText = data.module;
-        renderWritingProduct(data.writing_metrics);
-        return;
-    }
-
-    if (analysisMode === "writing_process") {
-        if (!processClosed) {
-            freezeProcess();
-        }
-
-        const response = await fetch("/api/write/process-evaluate", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({
-                text: text,
-                language: "es",
-                level: level,
-                genre: genre,
-                task: "open_writing_task",
-                purpose: "process_writing_evaluation",
-                writing_mode: "live",
-                total_time_seconds: finalTotalTimeSeconds,
-                initial_latency_seconds: finalInitialLatencySeconds,
-                pause_count: longPauseCount,
-                long_pause_count: longPauseCount,
-                edit_count: editCount,
-                deletion_count: deletionCount,
-                insertion_count: insertionCount,
-                local_adjustment_count: localAdjustmentCount,
-                reformulation_count: reformulationCount,
-                expansion_count: expansionCount,
-                reduction_count: reductionCount,
-                macro_adjustment_count: macroAdjustmentCount,
-                max_text_length: maxTextLength || text.length,
-                final_text_length: text.length,
-                input_event_count: inputEventCount
-            })
-        });
-
-        const data = await response.json();
-
-        document.getElementById("moduleLabel").innerText = data.module;
-
-        const product = data.product_metrics;
-        const process = data.process_metrics;
-
-        renderWritingProduct(product);
-
-        document.getElementById("processSectionResult").style.display = "block";
-
-        document.getElementById("processMetrics").innerHTML = `
-            <div class="metric"><strong>Modo de ingreso:</strong> ${process.writing_mode}</div>
-            <div class="metric"><strong>Tiempo total:</strong> ${process.total_time_seconds} s</div>
-            <div class="metric"><strong>Latencia inicial:</strong> ${process.initial_latency_seconds} s</div>
-            <div class="metric"><strong>Pausas largas:</strong> ${process.long_pause_count}</div>
-            <div class="metric"><strong>Ediciones:</strong> ${process.edit_count}</div>
-            <div class="metric"><strong>Inserciones:</strong> ${process.insertion_count}</div>
-            <div class="metric"><strong>Borrados:</strong> ${process.deletion_count}</div>
-            <div class="metric"><strong>Ajustes locales:</strong> ${process.local_adjustment_count}</div>
-            <div class="metric"><strong>Reformulaciones:</strong> ${process.reformulation_count}</div>
-            <div class="metric"><strong>Expansiones:</strong> ${process.expansion_count}</div>
-            <div class="metric"><strong>Reducciones:</strong> ${process.reduction_count}</div>
-            <div class="metric"><strong>Ajustes macrotextuales:</strong> ${process.macro_adjustment_count}</div>
-            <div class="metric"><strong>Eventos de escritura:</strong> ${process.input_event_count}</div>
-            <div class="metric"><strong>Palabras por minuto:</strong> ${process.words_per_minute}</div>
-            <div class="metric"><strong>Estabilidad final:</strong> ${process.final_stability_ratio}</div>
-        `;
-
-        document.getElementById("processScores").innerHTML = `
-            <h3>Puntajes preliminares del proceso</h3>
-            <div class="score-box">
-                <div class="score"><strong>Planificación</strong><span>${process.planning_score}</span></div>
-                <div class="score"><strong>Monitoreo</strong><span>${process.monitoring_score}</span></div>
-                <div class="score"><strong>Revisión</strong><span>${process.revision_score}</span></div>
-                <div class="score"><strong>Reformulación</strong><span>${process.reformulation_score}</span></div>
-                <div class="score"><strong>Fluidez</strong><span>${process.fluency_score}</span></div>
-                <div class="score"><strong>Recursividad</strong><span>${process.recursivity_score}</span></div>
-                <div class="score"><strong>Regulación global</strong><span>${process.process_regulation_score}</span></div>
-                <div class="score"><strong>Nivel proceso</strong><span>${process.process_regulation_label}</span></div>
-            </div>
-        `;
-
-        document.getElementById("interpretation").innerText = process.interpretation;
-        document.getElementById("integratedSection").style.display = "block";
-        document.getElementById("integratedInterpretation").innerText = data.integrated_interpretation;
-    }
-}
-
-function renderWritingProduct(metrics) {
-    const scores = metrics.scores;
-
-    document.getElementById("productTitle").innerText = "Producto escrito";
-
-    document.getElementById("metrics").innerHTML = `
-        <div class="metric"><strong>Palabras:</strong> ${metrics.word_count}</div>
-        <div class="metric"><strong>Oraciones:</strong> ${metrics.sentence_count}</div>
-        <div class="metric"><strong>Párrafos:</strong> ${metrics.paragraph_count}</div>
-        <div class="metric"><strong>Longitud oracional promedio:</strong> ${metrics.avg_sentence_length}</div>
-        <div class="metric"><strong>TTR:</strong> ${metrics.type_token_ratio}</div>
-        <div class="metric"><strong>Densidad léxica:</strong> ${metrics.lexical_density_proxy}</div>
-        <div class="metric"><strong>Conectores detectados:</strong> ${metrics.connector_count}</div>
-        <div class="metric"><strong>Conectores:</strong> ${metrics.connectors_found.join(", ") || "No detectados"}</div>
-        <div class="metric"><strong>Marcas de puntuación:</strong> ${metrics.punctuation_count}</div>
-        <div class="metric"><strong>Cierre textual:</strong> ${metrics.closure_present ? "Detectado" : "No detectado"}</div>
-    `;
-
-    document.getElementById("scores").innerHTML = `
-        <h3>Puntajes preliminares del producto</h3>
-        <div class="score-box">
-            <div class="score"><strong>Extensión</strong><span>${scores.extension}</span></div>
-            <div class="score"><strong>Organización</strong><span>${scores.organization}</span></div>
-            <div class="score"><strong>Cohesión</strong><span>${scores.cohesion}</span></div>
-            <div class="score"><strong>Sintaxis</strong><span>${scores.syntax_control}</span></div>
-            <div class="score"><strong>Léxico</strong><span>${scores.lexical_variety}</span></div>
-            <div class="score"><strong>Densidad informativa</strong><span>${scores.informational_density}</span></div>
-            <div class="score"><strong>Elaboración</strong><span>${scores.idea_elaboration}</span></div>
-            <div class="score"><strong>Coherencia global</strong><span>${scores.global_coherence}</span></div>
-            <div class="score"><strong>Puntuación</strong><span>${scores.punctuation_control}</span></div>
-            <div class="score"><strong>Adecuación género</strong><span>${scores.genre_adequacy}</span></div>
-            <div class="score"><strong>Cierre</strong><span>${scores.textual_closure}</span></div>
-            <div class="score"><strong>Puntaje global</strong><span>${scores.global_writing_score}</span></div>
-            <div class="score"><strong>Nivel</strong><span>${metrics.level_label}</span></div>
-        </div>
-    `;
-
-    document.getElementById("interpretation").innerText = metrics.interpretation;
-}
-
-function renderMultiPreview(results) {
-    if (!results || results.length === 0) {
-        return "<p>No se detectaron textos.</p>";
-    }
-
-    let html = "<h3>Vista preliminar</h3>";
-    html += "<div class='score-box'>";
-
-    results.slice(0, 8).forEach((item) => {
-        const score = item.scores_global_writing_score || item.word_count || "";
-        html += `
-            <div class="score">
-                <strong>${item.id}</strong>
-                <span>${score}</span>
-            </div>
-        `;
-    });
-
-    html += "</div>";
-
-    if (results.length > 8) {
-        html += `<p class="note">Se muestran 8 de ${results.length} textos. Descarga el Excel para ver todo.</p>`;
-    }
-
-    return html;
-}
-
-async function downloadExcel() {
-    const analysisMode = currentAnalysisMode();
-    const entryMode = currentEntryMode();
-    const text = document.getElementById("textInput").value;
-    const level = document.getElementById("level").value;
-    const genre = document.getElementById("genre").value;
-
-    if (!text.trim()) {
-        alert("Por favor escribe o pega texto antes de descargar el Excel.");
-        return;
-    }
-
-    if (entryMode === "pasted_multi") {
-        const response = await fetch("/api/export/multi-excel", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({
-                raw_input: text,
-                analysis_mode: analysisMode,
-                language: "es",
-                level: level,
-                genre: genre,
-                purpose: "multitext_excel_export"
-            })
-        });
-
-        if (!response.ok) {
-            alert("No se pudo generar el Excel multitexto.");
-            return;
-        }
-
-        const blob = await response.blob();
-        downloadBlob(blob, "scriptora_multitexto_v0_9_3.xlsx");
-        return;
-    }
-
-    if (analysisMode === "writing_process" && !processClosed) {
-        freezeProcess();
-    }
-
-    const payload = {
-        analysis_mode: analysisMode,
-        entry_mode: entryMode,
+    return {{
         text: text,
         language: "es",
         level: level,
         genre: genre,
-        task: "open_writing_task",
-        purpose: "scriptora_excel_export",
+        task: "researcher_analysis",
+        purpose: "scriptora_suite_analysis"
+    }};
+}}
+
+function processPayload(extra={{}}) {{
+    const text = document.getElementById("textInput").value;
+    const currentLength = text.length;
+
+    return {{
+        ...basePayload(),
         writing_mode: isProcessMode() ? "live" : "pasted",
         total_time_seconds: finalTotalTimeSeconds,
         initial_latency_seconds: finalInitialLatencySeconds,
@@ -2488,25 +1997,259 @@ async function downloadExcel() {
         expansion_count: expansionCount,
         reduction_count: reductionCount,
         macro_adjustment_count: macroAdjustmentCount,
-        max_text_length: maxTextLength || text.length,
-        final_text_length: text.length,
-        input_event_count: inputEventCount
-    };
+        max_text_length: Math.max(maxTextLength, currentLength),
+        final_text_length: currentLength,
+        input_event_count: inputEventCount,
+        ...extra
+    }};
+}}
 
-    const response = await fetch("/api/export/excel", {
+function scoreBox(label, value) {{
+    return `<div class="score"><strong>${{label}}</strong><span>${{value}}</span></div>`;
+}}
+
+function metricLine(label, value) {{
+    return `<div class="metric"><strong>${{label}}:</strong> ${{value}}</div>`;
+}}
+
+function renderProduct(product) {{
+    const metrics = document.getElementById("metrics");
+    const scores = document.getElementById("scores");
+
+    metrics.innerHTML =
+        metricLine("Palabras", product.word_count) +
+        metricLine("Oraciones", product.sentence_count) +
+        metricLine("Párrafos", product.paragraph_count) +
+        metricLine("Longitud oracional promedio", product.avg_sentence_length) +
+        metricLine("TTR", product.type_token_ratio) +
+        metricLine("Densidad léxica", product.lexical_density_proxy) +
+        metricLine("Conectores detectados", product.connector_count) +
+        metricLine("Conectores", product.connectors_found && product.connectors_found.length ? product.connectors_found.join(", ") : "No detectados") +
+        metricLine("Marcas de puntuación", product.punctuation_count) +
+        metricLine("Cierre textual", product.closure_present ? "Detectado" : "No detectado");
+
+    const s = product.scores;
+    scores.innerHTML = `
+        <h3>Puntajes preliminares del producto</h3>
+        <div class="score-box">
+            ${{scoreBox("Extensión", s.extension)}}
+            ${{scoreBox("Organización", s.organization)}}
+            ${{scoreBox("Cohesión", s.cohesion)}}
+            ${{scoreBox("Sintaxis", s.syntax_control)}}
+            ${{scoreBox("Léxico", s.lexical_variety)}}
+            ${{scoreBox("Densidad informativa", s.informational_density)}}
+            ${{scoreBox("Elaboración", s.idea_elaboration)}}
+            ${{scoreBox("Coherencia global", s.global_coherence)}}
+            ${{scoreBox("Puntuación", s.punctuation_control)}}
+            ${{scoreBox("Adecuación género", s.genre_adequacy)}}
+            ${{scoreBox("Cierre", s.textual_closure)}}
+            ${{scoreBox("Puntaje global", s.global_writing_score)}}
+            ${{scoreBox("Nivel", product.level_label)}}
+        </div>
+    `;
+}}
+
+function renderProcess(process) {{
+    document.getElementById("processSectionResult").style.display = "block";
+
+    const evidence = document.getElementById("evidenceLabel");
+    evidence.innerText = "Nivel de evidencia: " + (process.evidence_label || "No determinado");
+    evidence.style.display = "inline-block";
+
+    document.getElementById("processMetrics").innerHTML =
+        metricLine("Modo de ingreso", process.writing_mode) +
+        metricLine("Tiempo total", process.total_time_seconds + " s") +
+        metricLine("Latencia inicial", process.initial_latency_seconds + " s") +
+        metricLine("Pausas largas", process.long_pause_count) +
+        metricLine("Ediciones significativas", process.edit_count) +
+        metricLine("Inserciones reales", process.insertion_count) +
+        metricLine("Borrados reales", process.deletion_count) +
+        metricLine("Ajustes locales", process.local_adjustment_count) +
+        metricLine("Reformulaciones", process.reformulation_count) +
+        metricLine("Expansiones", process.expansion_count) +
+        metricLine("Reducciones", process.reduction_count) +
+        metricLine("Ajustes macrotextuales", process.macro_adjustment_count) +
+        metricLine("Eventos mecánicos de escritura", process.input_event_count) +
+        metricLine("Palabras por minuto", process.words_per_minute) +
+        metricLine("Estabilidad final", process.final_stability_ratio) +
+        metricLine("Nivel de evidencia", process.evidence_label || "No determinado");
+
+    document.getElementById("processScores").innerHTML = `
+        <h3>Puntajes preliminares del proceso</h3>
+        <div class="score-box">
+            ${{scoreBox("Planificación", process.planning_score)}}
+            ${{scoreBox("Monitoreo", process.monitoring_score)}}
+            ${{scoreBox("Revisión", process.revision_score)}}
+            ${{scoreBox("Reformulación", process.reformulation_score)}}
+            ${{scoreBox("Fluidez", process.fluency_score)}}
+            ${{scoreBox("Recursividad", process.recursivity_score)}}
+            ${{scoreBox("Regulación global", process.process_regulation_score)}}
+            ${{scoreBox("Nivel proceso", process.process_regulation_label)}}
+        </div>
+    `;
+}}
+
+async function runScriptora() {{
+    const text = document.getElementById("textInput").value;
+    const analysisMode = currentAnalysisMode();
+    const entryMode = currentEntryMode();
+
+    if (!text.trim() && entryMode !== "corpus_excel") {{
+        alert("Por favor ingresa un texto antes de analizar.");
+        return;
+    }}
+
+    document.getElementById("result").style.display = "block";
+    document.getElementById("processSectionResult").style.display = "none";
+    document.getElementById("integratedSection").style.display = "none";
+    document.getElementById("evidenceLabel").style.display = "none";
+
+    if (analysisMode === "text_analysis" && entryMode !== "pasted_multi") {{
+        const response = await fetch("/api/text/analyze", {{
+            method: "POST",
+            headers: {{"Content-Type": "application/json"}},
+            body: JSON.stringify(basePayload())
+        }});
+
+        const data = await response.json();
+        const raw = data.raw_metrics;
+
+        document.getElementById("moduleLabel").innerText = data.module;
+        document.getElementById("productTitle").innerText = "Producto textual";
+        document.getElementById("metrics").innerHTML =
+            metricLine("Palabras", raw.word_count) +
+            metricLine("Caracteres", raw.char_count) +
+            metricLine("Oraciones", raw.sentence_count) +
+            metricLine("Palabras únicas", raw.unique_words) +
+            metricLine("Longitud oracional promedio", raw.avg_sentence_length) +
+            metricLine("TTR", raw.type_token_ratio) +
+            metricLine("Densidad léxica", raw.lexical_density_proxy);
+        document.getElementById("scores").innerHTML = "";
+        document.getElementById("interpretation").innerText = data.interpretation;
+        return;
+    }}
+
+    if (entryMode === "pasted_multi") {{
+        const response = await fetch("/api/multi/analyze", {{
+            method: "POST",
+            headers: {{"Content-Type": "application/json"}},
+            body: JSON.stringify({{
+                raw_input: text,
+                analysis_mode: analysisMode,
+                language: "es",
+                level: document.getElementById("level").value,
+                genre: document.getElementById("genre").value,
+                purpose: "multitext_analysis"
+            }})
+        }});
+
+        const data = await response.json();
+        document.getElementById("moduleLabel").innerText = data.module;
+        document.getElementById("productTitle").innerText = "Resumen multitexto";
+        document.getElementById("metrics").innerHTML =
+            metricLine("Total de textos procesados", data.total_texts) +
+            metricLine("Modo de análisis", data.analysis_mode);
+        document.getElementById("scores").innerHTML = "";
+        document.getElementById("interpretation").innerText = "El análisis multitexto fue procesado correctamente. Descarga el Excel para revisar la matriz completa por texto.";
+        return;
+    }}
+
+    if (analysisMode === "writing_product") {{
+        const response = await fetch("/api/write/evaluate", {{
+            method: "POST",
+            headers: {{"Content-Type": "application/json"}},
+            body: JSON.stringify(basePayload())
+        }});
+
+        const data = await response.json();
+        const product = data.writing_metrics;
+
+        document.getElementById("moduleLabel").innerText = data.module;
+        document.getElementById("productTitle").innerText = "Producto escrito";
+        renderProduct(product);
+        document.getElementById("interpretation").innerText = product.interpretation;
+        return;
+    }}
+
+    if (analysisMode === "writing_process") {{
+        closeProcessCapture();
+
+        const response = await fetch("/api/write/process-evaluate", {{
+            method: "POST",
+            headers: {{"Content-Type": "application/json"}},
+            body: JSON.stringify(processPayload())
+        }});
+
+        const data = await response.json();
+        const product = data.product_metrics;
+        const process = data.process_metrics;
+
+        document.getElementById("moduleLabel").innerText = data.module;
+        document.getElementById("productTitle").innerText = "Producto escrito";
+        renderProduct(product);
+        renderProcess(process);
+        document.getElementById("interpretation").innerText = process.interpretation;
+        document.getElementById("integratedSection").style.display = "block";
+        document.getElementById("integratedInterpretation").innerText = data.integrated_interpretation;
+        return;
+    }}
+}}
+
+async function downloadExcel() {{
+    const text = document.getElementById("textInput").value;
+    const analysisMode = currentAnalysisMode();
+    const entryMode = currentEntryMode();
+
+    if (!text.trim()) {{
+        alert("Por favor ingresa un texto antes de exportar.");
+        return;
+    }}
+
+    if (entryMode === "pasted_multi") {{
+        const response = await fetch("/api/multi/export-excel", {{
+            method: "POST",
+            headers: {{"Content-Type": "application/json"}},
+            body: JSON.stringify({{
+                raw_input: text,
+                analysis_mode: analysisMode,
+                language: "es",
+                level: document.getElementById("level").value,
+                genre: document.getElementById("genre").value,
+                purpose: "multitext_analysis"
+            }})
+        }});
+
+        if (!response.ok) {{
+            alert("No se pudo generar el Excel multitexto.");
+            return;
+        }}
+
+        const blob = await response.blob();
+        downloadBlob(blob, "scriptora_multitexto_resultados_v{SCRIPTORA_VERSION}.xlsx");
+        return;
+    }}
+
+    if (analysisMode === "writing_process") {{
+        closeProcessCapture();
+    }}
+
+    const response = await fetch("/api/export/excel", {{
         method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify(payload)
-    });
+        headers: {{"Content-Type": "application/json"}},
+        body: JSON.stringify(processPayload({{
+            analysis_mode: analysisMode,
+            entry_mode: entryMode
+        }}))
+    }});
 
-    if (!response.ok) {
+    if (!response.ok) {{
         alert("No se pudo generar el Excel.");
         return;
-    }
+    }}
 
     const blob = await response.blob();
-    downloadBlob(blob, "scriptora_resultados_v0_9_3.xlsx");
-}
+    downloadBlob(blob, "scriptora_resultados_v{SCRIPTORA_VERSION}.xlsx");
+}}
 </script>
 </body>
 </html>
@@ -2514,19 +2257,8 @@ async function downloadExcel() {
 
 
 # ============================================================
-# ENDPOINTS
+# ENDPOINTS API
 # ============================================================
-
-@app.get("/api/health")
-def health():
-    return {
-        "status": "ok",
-        "service": "Scriptora Suite",
-        "version": "0.9.3",
-        "timestamp": datetime.utcnow().isoformat(),
-        "participant_submissions": len(PARTICIPANT_SUBMISSIONS)
-    }
-
 
 @app.post("/api/text/analyze")
 def analyze_text(request: TextAnalysisRequest):
@@ -2534,7 +2266,7 @@ def analyze_text(request: TextAnalysisRequest):
 
     return {
         "module": "Scriptora T · Text Analysis",
-        "version": "0.9.3",
+        "version": SCRIPTORA_VERSION,
         "language": request.language,
         "context": request.context,
         "level": request.level,
@@ -2562,7 +2294,7 @@ def evaluate_writing(request: WritingEvaluationRequest):
 
     return {
         "module": "Scriptora W · Writing Product Evaluation",
-        "version": "0.9.3",
+        "version": SCRIPTORA_VERSION,
         "language": request.language,
         "level": request.level,
         "genre": request.genre,
@@ -2588,7 +2320,7 @@ def evaluate_writing_process(request: WritingProcessRequest):
 
     return {
         "module": "Scriptora W · Product + Process Evaluation",
-        "version": "0.9.3",
+        "version": SCRIPTORA_VERSION,
         "language": request.language,
         "level": request.level,
         "genre": request.genre,
@@ -2608,7 +2340,7 @@ def multi_analyze(request: MultiTextRequest):
 
     return {
         "module": module_label,
-        "version": "0.9.3",
+        "version": SCRIPTORA_VERSION,
         "total_texts": len(results),
         "language": request.language,
         "level": request.level,
@@ -2616,6 +2348,34 @@ def multi_analyze(request: MultiTextRequest):
         "analysis_mode": request.analysis_mode,
         "results": results
     }
+
+
+@app.post("/api/multi/export-excel")
+def multi_export_excel(request: MultiExcelExportRequest):
+    rows = analyze_multitext(request)
+
+    metadata = {
+        "scriptora_version": SCRIPTORA_VERSION,
+        "timestamp_utc": datetime.utcnow().isoformat(),
+        "total_textos": len(rows),
+        "analysis_mode": request.analysis_mode,
+        "language": request.language,
+        "level": request.level,
+        "genre": request.genre,
+        "formato_entrada": "Bloques separados por ### ID: nombre o por línea ---.",
+        "advertencia_metodologica": "Resultados preliminares; requieren calibración con corpus reales."
+    }
+
+    output = create_multi_analysis_excel(rows, metadata)
+    filename = f"scriptora_multitexto_resultados_v{SCRIPTORA_VERSION}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
+
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}"
+        }
+    )
 
 
 @app.post("/api/participant/submit")
@@ -2643,7 +2403,7 @@ def participant_list():
 @app.get("/api/participant/export-excel")
 def participant_export_excel():
     output = create_participant_excel()
-    filename = f"scriptora_respuestas_participantes_v0_9_3_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    filename = f"scriptora_respuestas_participantes_v{SCRIPTORA_VERSION}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
 
     return StreamingResponse(
         output,
@@ -2681,7 +2441,7 @@ async def corpus_upload_excel(
         rows = process_corpus_excel(file_bytes, analysis_mode=analysis_mode)
         output = create_corpus_excel(rows, analysis_mode=analysis_mode)
 
-        filename = f"scriptora_corpus_resultados_v0_9_3_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        filename = f"scriptora_corpus_resultados_v{SCRIPTORA_VERSION}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
 
         return StreamingResponse(
             output,
@@ -2710,7 +2470,7 @@ def export_excel(request: ExcelExportRequest):
     resultados = {
         "analysis_id": analysis_id,
         "timestamp_utc": timestamp,
-        "scriptora_version": "0.9.3",
+        "scriptora_version": SCRIPTORA_VERSION,
         "analysis_mode": analysis_mode,
         "entry_mode": entry_mode,
         "language": request.language,
@@ -2766,29 +2526,20 @@ def export_excel(request: ExcelExportRequest):
         resultados.update(flatten_dict(product_metrics, "product"))
         resultados.update(flatten_dict(process_metrics, "process"))
 
-    metadatos = {
-        "analysis_id": analysis_id,
-        "timestamp_utc": timestamp,
-        "scriptora_version": "0.9.3",
-        "analysis_mode": analysis_mode,
-        "entry_mode": entry_mode,
-        "archivo_generado": "scriptora_resultados_v0_9_3.xlsx",
-        "hoja_resultados_vertical": "Resultados en formato vertical legible.",
-        "hoja_matriz_analisis": "Resultados en formato horizontal para análisis estadístico.",
-        "hoja_diccionario_variables": "Definiciones operativas de las variables incluidas.",
-        "hoja_metadatos": "Información general del análisis y versión.",
-        "advertencia_metodologica": "Resultados preliminares; deben calibrarse con datos reales, rúbricas humanas y benchmarks contextuales.",
-        "trazabilidad_proceso": "La interpretación del proceso solo es válida cuando el texto fue escrito en vivo y no pegado."
+    export_data = {
+        "metadatos": {
+            "scriptora_version": SCRIPTORA_VERSION,
+            "analysis_id": analysis_id,
+            "timestamp_utc": timestamp,
+            "analysis_mode": analysis_mode,
+            "entry_mode": entry_mode,
+            "advertencia_metodologica": "Resultados preliminares; requieren calibración con rúbricas humanas, benchmarks y datos TRUNAJOD."
+        },
+        "resultados": resultados
     }
 
-    excel_data = {
-        "resultados": resultados,
-        "metadatos": metadatos
-    }
-
-    output = create_single_analysis_excel(excel_data)
-
-    filename = f"scriptora_resultados_v0_9_3_{analysis_id[:8]}.xlsx"
+    output = create_single_analysis_excel(export_data)
+    filename = f"scriptora_resultados_v{SCRIPTORA_VERSION}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
 
     return StreamingResponse(
         output,
@@ -2798,95 +2549,3 @@ def export_excel(request: ExcelExportRequest):
         }
     )
 
-
-@app.post("/api/export/multi-excel")
-def export_multi_excel(request: MultiExcelExportRequest):
-    analysis_id = str(uuid.uuid4())
-    timestamp = datetime.utcnow().isoformat()
-
-    rows = analyze_multitext(request)
-
-    metadata = {
-        "analysis_id": analysis_id,
-        "timestamp_utc": timestamp,
-        "scriptora_version": "0.9.3",
-        "archivo_generado": "scriptora_multitexto_v0_9_3.xlsx",
-        "analysis_mode": request.analysis_mode,
-        "language": request.language,
-        "level": request.level,
-        "genre": request.genre,
-        "total_texts": len(rows),
-        "formato_entrada": "Bloques con ### ID: o separación mediante línea ---.",
-        "hoja_matriz_multitexto": "Una fila por texto procesado.",
-        "hoja_resultados_vertical": "Resultados en formato vertical por ID y variable.",
-        "hoja_diccionario_variables": "Definiciones operativas de variables.",
-        "advertencia_metodologica": "Resultados preliminares; requieren calibración con corpus reales, rúbricas humanas y benchmarks contextuales."
-    }
-
-    output = create_multi_analysis_excel(rows, metadata)
-
-    filename = f"scriptora_multitexto_v0_9_3_{analysis_id[:8]}.xlsx"
-
-    return StreamingResponse(
-        output,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={
-            "Content-Disposition": f"attachment; filename={filename}"
-        }
-    )
-
-
-@app.get("/api/benchmarks")
-def list_benchmarks():
-    return {
-        "benchmarks": [
-            {
-                "benchmark_id": "ES_TEXT_GENERAL_V1",
-                "module": "Scriptora T",
-                "language": "es",
-                "status": "prototype"
-            },
-            {
-                "benchmark_id": "ES_WRITE_PRODUCT_V1",
-                "module": "Scriptora W · Product",
-                "language": "es",
-                "status": "prototype"
-            },
-            {
-                "benchmark_id": "ES_WRITE_PROCESS_REGULATION_V1",
-                "module": "Scriptora W · Process",
-                "language": "es",
-                "status": "prototype"
-            },
-            {
-                "benchmark_id": "ES_TEXT_MULTI_V1",
-                "module": "Scriptora T · Multitexto",
-                "language": "es",
-                "status": "prototype"
-            },
-            {
-                "benchmark_id": "ES_WRITE_PRODUCT_MULTI_V1",
-                "module": "Scriptora W · Producto multitexto",
-                "language": "es",
-                "status": "prototype"
-            },
-            {
-                "benchmark_id": "ES_PARTICIPANT_REGISTRY_V1",
-                "module": "Scriptora · Registro participantes",
-                "language": "es",
-                "status": "prototype"
-            },
-            {
-                "benchmark_id": "ES_CORPUS_EXCEL_UPLOAD_V2",
-                "module": "Scriptora · Corpus Excel",
-                "language": "es",
-                "status": "prototype"
-            },
-            {
-                "benchmark_id": "ES_RESEARCHER_INTERFACE_CLEANUP_V1",
-                "module": "Scriptora · Interfaz investigador",
-                "language": "es",
-                "status": "prototype"
-            }
-        ]
-    }
