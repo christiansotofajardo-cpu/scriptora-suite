@@ -14,9 +14,16 @@ from openpyxl.utils import get_column_letter
 
 app = FastAPI(
     title="Scriptora Suite API",
-    description="Scriptora Suite: plataforma para análisis textual, escritura, proceso escritural, multitexto y exportación Excel por roles.",
-    version="0.9.0"
+    description="Scriptora Suite: plataforma para análisis textual, escritura, proceso escritural, multitexto, registro de participantes y exportación Excel por roles.",
+    version="0.9.1"
 )
+
+
+# ============================================================
+# ALMACENAMIENTO TEMPORAL EN MEMORIA
+# ============================================================
+
+PARTICIPANT_SUBMISSIONS = []
 
 
 # ============================================================
@@ -82,6 +89,16 @@ class MultiTextRequest(BaseModel):
 
 class MultiExcelExportRequest(MultiTextRequest):
     pass
+
+
+class ParticipantSubmissionRequest(BaseModel):
+    participant_id: str | None = None
+    text: str
+    language: str = "es"
+    level: str | None = "general"
+    genre: str | None = "argumentativo"
+    task: str | None = "participant_writing_task"
+    purpose: str | None = "silent_participant_submission"
 
 
 # ============================================================
@@ -684,6 +701,63 @@ def analyze_multitext(request: MultiTextRequest):
 
 
 # ============================================================
+# PARTICIPANTES
+# ============================================================
+
+def create_participant_record(request: ParticipantSubmissionRequest):
+    submission_id = str(uuid.uuid4())
+    participant_id = request.participant_id.strip() if request.participant_id else f"participante_{len(PARTICIPANT_SUBMISSIONS) + 1:03d}"
+    timestamp = datetime.utcnow().isoformat()
+    text = request.text.strip()
+
+    product_metrics = score_writing_product(
+        text=text,
+        genre=request.genre or "argumentativo"
+    )
+
+    record = {
+        "submission_id": submission_id,
+        "participant_id": participant_id,
+        "timestamp_utc": timestamp,
+        "language": request.language,
+        "level": request.level,
+        "genre": request.genre,
+        "task": request.task,
+        "purpose": request.purpose,
+        "texto_original": text,
+        "word_count": product_metrics.get("word_count"),
+        "sentence_count": product_metrics.get("sentence_count"),
+        "paragraph_count": product_metrics.get("paragraph_count"),
+        "avg_sentence_length": product_metrics.get("avg_sentence_length"),
+        "unique_words": product_metrics.get("unique_words"),
+        "type_token_ratio": product_metrics.get("type_token_ratio"),
+        "lexical_density_proxy": product_metrics.get("lexical_density_proxy"),
+        "connector_count": product_metrics.get("connector_count"),
+        "connectors_found": ", ".join(product_metrics.get("connectors_found", [])),
+        "punctuation_count": product_metrics.get("punctuation_count"),
+        "closure_present": product_metrics.get("closure_present"),
+        "scores_extension": product_metrics.get("scores", {}).get("extension"),
+        "scores_organization": product_metrics.get("scores", {}).get("organization"),
+        "scores_cohesion": product_metrics.get("scores", {}).get("cohesion"),
+        "scores_syntax_control": product_metrics.get("scores", {}).get("syntax_control"),
+        "scores_lexical_variety": product_metrics.get("scores", {}).get("lexical_variety"),
+        "scores_informational_density": product_metrics.get("scores", {}).get("informational_density"),
+        "scores_idea_elaboration": product_metrics.get("scores", {}).get("idea_elaboration"),
+        "scores_global_coherence": product_metrics.get("scores", {}).get("global_coherence"),
+        "scores_punctuation_control": product_metrics.get("scores", {}).get("punctuation_control"),
+        "scores_genre_adequacy": product_metrics.get("scores", {}).get("genre_adequacy"),
+        "scores_textual_closure": product_metrics.get("scores", {}).get("textual_closure"),
+        "scores_global_writing_score": product_metrics.get("scores", {}).get("global_writing_score"),
+        "level_label": product_metrics.get("level_label"),
+        "interpretation_product": product_metrics.get("interpretation")
+    }
+
+    PARTICIPANT_SUBMISSIONS.append(record)
+
+    return record
+
+
+# ============================================================
 # EXCEL
 # ============================================================
 
@@ -713,6 +787,30 @@ def flatten_dict(data, prefix=""):
 
 def build_variable_dictionary():
     return [
+        {
+            "variable": "participant_id",
+            "nombre_amigable": "ID del participante",
+            "modulo": "Participante",
+            "dimension": "Identificación",
+            "descripcion": "Identificador asignado al participante.",
+            "como_se_calcula": "Ingresado por usuario o generado automáticamente.",
+            "tipo_valor": "Texto",
+            "rango_esperado": "Variable",
+            "interpretacion_general": "Permite vincular respuestas con participantes.",
+            "observaciones": "En investigación real debe definirse un protocolo de anonimización."
+        },
+        {
+            "variable": "submission_id",
+            "nombre_amigable": "ID del envío",
+            "modulo": "Participante",
+            "dimension": "Identificación",
+            "descripcion": "Identificador único de la respuesta enviada.",
+            "como_se_calcula": "UUID generado automáticamente.",
+            "tipo_valor": "Texto",
+            "rango_esperado": "Variable",
+            "interpretacion_general": "Permite rastrear cada envío.",
+            "observaciones": "Útil cuando un participante responde más de una tarea."
+        },
         {
             "variable": "id",
             "nombre_amigable": "ID del texto",
@@ -858,42 +956,6 @@ def build_variable_dictionary():
             "observaciones": "No evalúa pertinencia semántica."
         },
         {
-            "variable": "connectors_found",
-            "nombre_amigable": "Conectores encontrados",
-            "modulo": "Scriptora W Producto",
-            "dimension": "Cohesión",
-            "descripcion": "Lista de conectores identificados.",
-            "como_se_calcula": "Coincidencia con lista preliminar.",
-            "tipo_valor": "Texto",
-            "rango_esperado": "Variable",
-            "interpretacion_general": "Permite observar recursos cohesivos usados.",
-            "observaciones": "No distingue función ni calidad de uso."
-        },
-        {
-            "variable": "punctuation_count",
-            "nombre_amigable": "Marcas de puntuación",
-            "modulo": "Scriptora W Producto",
-            "dimension": "Control formal",
-            "descripcion": "Cantidad de signos de puntuación básicos.",
-            "como_se_calcula": "Conteo de puntos, comas, dos puntos, punto y coma, signos de interrogación y exclamación.",
-            "tipo_valor": "Entero",
-            "rango_esperado": "0 en adelante",
-            "interpretacion_general": "Puede reflejar control básico de segmentación.",
-            "observaciones": "No implica uso correcto por sí solo."
-        },
-        {
-            "variable": "closure_present",
-            "nombre_amigable": "Cierre textual",
-            "modulo": "Scriptora W Producto",
-            "dimension": "Organización discursiva",
-            "descripcion": "Indica si el texto contiene marcas explícitas de cierre.",
-            "como_se_calcula": "Detección de expresiones de cierre.",
-            "tipo_valor": "Booleano",
-            "rango_esperado": "True / False",
-            "interpretacion_general": "La presencia de cierre puede reflejar completitud textual.",
-            "observaciones": "No todo género requiere cierre explícito."
-        },
-        {
             "variable": "scores_global_writing_score",
             "nombre_amigable": "Puntaje global del producto escrito",
             "modulo": "Scriptora W Producto",
@@ -916,114 +978,6 @@ def build_variable_dictionary():
             "rango_esperado": "Inicial / En desarrollo / Adecuado / Avanzado",
             "interpretacion_general": "Resume el desempeño escritural preliminar.",
             "observaciones": "Los puntos de corte son prototípicos."
-        },
-        {
-            "variable": "total_time_seconds",
-            "nombre_amigable": "Tiempo total de escritura",
-            "modulo": "Scriptora W Proceso",
-            "dimension": "Tiempo de producción",
-            "descripcion": "Duración total registrada desde el inicio hasta el análisis.",
-            "como_se_calcula": "Diferencia entre inicio de captura y análisis.",
-            "tipo_valor": "Decimal",
-            "rango_esperado": "0 en adelante",
-            "interpretacion_general": "Permite contextualizar fluidez y revisión.",
-            "observaciones": "Solo es válido si el texto fue escrito en vivo."
-        },
-        {
-            "variable": "initial_latency_seconds",
-            "nombre_amigable": "Latencia inicial",
-            "modulo": "Scriptora W Proceso",
-            "dimension": "Planificación",
-            "descripcion": "Tiempo transcurrido antes del primer evento de escritura.",
-            "como_se_calcula": "Tiempo entre inicio de sesión y primera entrada.",
-            "tipo_valor": "Decimal",
-            "rango_esperado": "0 en adelante",
-            "interpretacion_general": "Puede sugerir planificación previa.",
-            "observaciones": "También puede deberse a distracción."
-        },
-        {
-            "variable": "long_pause_count",
-            "nombre_amigable": "Pausas largas",
-            "modulo": "Scriptora W Proceso",
-            "dimension": "Monitoreo",
-            "descripcion": "Cantidad de pausas superiores al umbral definido.",
-            "como_se_calcula": "Conteo de intervalos de inactividad superiores a 3 segundos.",
-            "tipo_valor": "Entero",
-            "rango_esperado": "0 en adelante",
-            "interpretacion_general": "Puede sugerir planificación, monitoreo o revisión.",
-            "observaciones": "No toda pausa implica regulación."
-        },
-        {
-            "variable": "edit_count",
-            "nombre_amigable": "Ediciones",
-            "modulo": "Scriptora W Proceso",
-            "dimension": "Actividad escritural",
-            "descripcion": "Cantidad de eventos de modificación del texto.",
-            "como_se_calcula": "Conteo de cambios detectados durante la escritura.",
-            "tipo_valor": "Entero",
-            "rango_esperado": "0 en adelante",
-            "interpretacion_general": "Puede reflejar actividad de escritura y revisión.",
-            "observaciones": "Todavía puede capturar microeventos."
-        },
-        {
-            "variable": "insertion_count",
-            "nombre_amigable": "Inserciones",
-            "modulo": "Scriptora W Proceso",
-            "dimension": "Producción",
-            "descripcion": "Cantidad estimada de caracteres agregados.",
-            "como_se_calcula": "Suma de diferencias positivas entre estados consecutivos.",
-            "tipo_valor": "Entero",
-            "rango_esperado": "0 en adelante",
-            "interpretacion_general": "Refleja crecimiento bruto del texto.",
-            "observaciones": "Puede superar la longitud final si hubo borrados."
-        },
-        {
-            "variable": "deletion_count",
-            "nombre_amigable": "Borrados",
-            "modulo": "Scriptora W Proceso",
-            "dimension": "Revisión",
-            "descripcion": "Cantidad estimada de caracteres eliminados.",
-            "como_se_calcula": "Suma de diferencias negativas entre estados consecutivos.",
-            "tipo_valor": "Entero",
-            "rango_esperado": "0 en adelante",
-            "interpretacion_general": "Puede sugerir corrección o revisión.",
-            "observaciones": "No distingue borrado mecánico de revisión profunda."
-        },
-        {
-            "variable": "process_regulation_score",
-            "nombre_amigable": "Puntaje global de regulación",
-            "modulo": "Scriptora W Proceso",
-            "dimension": "Regulación escritural",
-            "descripcion": "Índice sintético del proceso de escritura.",
-            "como_se_calcula": "Combinación ponderada de planificación, monitoreo, revisión, reformulación, fluidez y recursividad.",
-            "tipo_valor": "Decimal",
-            "rango_esperado": "0 a 100",
-            "interpretacion_general": "Valores más altos sugieren mayor regulación observable.",
-            "observaciones": "Solo debe interpretarse si el proceso fue trazable."
-        },
-        {
-            "variable": "process_regulation_label",
-            "nombre_amigable": "Nivel de regulación",
-            "modulo": "Scriptora W Proceso",
-            "dimension": "Regulación escritural",
-            "descripcion": "Categoría interpretativa del proceso escritural.",
-            "como_se_calcula": "Clasificación del process_regulation_score.",
-            "tipo_valor": "Texto",
-            "rango_esperado": "No trazable / Regulación baja / Regulación emergente / Regulación media / Regulación alta",
-            "interpretacion_general": "Resume la regulación escritural observable.",
-            "observaciones": "Debe calibrarse empíricamente."
-        },
-        {
-            "variable": "integrated_interpretation",
-            "nombre_amigable": "Síntesis integrada",
-            "modulo": "Scriptora W Producto + Proceso",
-            "dimension": "Interpretación integrada",
-            "descripcion": "Interpretación que relaciona producto escrito y proceso escritural.",
-            "como_se_calcula": "Reglas interpretativas basadas en producto y proceso.",
-            "tipo_valor": "Texto",
-            "rango_esperado": "Texto interpretativo",
-            "interpretacion_general": "Permite observar convergencias o tensiones.",
-            "observaciones": "Es exploratoria y requiere validación."
         },
         {
             "variable": "texto_original",
@@ -1233,6 +1187,64 @@ def create_multi_analysis_excel(rows, metadata):
     return output
 
 
+def create_participant_excel():
+    wb = Workbook()
+
+    ws = wb.active
+    ws.title = "respuestas_participantes"
+
+    if PARTICIPANT_SUBMISSIONS:
+        headers = list(PARTICIPANT_SUBMISSIONS[0].keys())
+        ws.append(headers)
+
+        for record in PARTICIPANT_SUBMISSIONS:
+            ws.append([safe_value(record.get(h, "")) for h in headers])
+    else:
+        ws.append(["mensaje"])
+        ws.append(["No hay respuestas de participantes registradas en esta sesión."])
+
+    style_sheet(ws)
+
+    ws_vertical = wb.create_sheet("resultados_vertical")
+    ws_vertical.append(["participant_id", "submission_id", "variable", "valor", "nombre_amigable", "modulo", "dimension", "descripcion"])
+
+    for record in PARTICIPANT_SUBMISSIONS:
+        participant_id = record.get("participant_id", "")
+        submission_id = record.get("submission_id", "")
+
+        for variable, value in record.items():
+            dict_info = get_dictionary_info(variable)
+            ws_vertical.append([
+                participant_id,
+                submission_id,
+                variable,
+                safe_value(value),
+                dict_info.get("nombre_amigable", ""),
+                dict_info.get("modulo", ""),
+                dict_info.get("dimension", ""),
+                dict_info.get("descripcion", "")
+            ])
+
+    style_sheet(ws_vertical)
+
+    add_dictionary_sheet(wb)
+
+    metadata = {
+        "scriptora_version": "0.9.1",
+        "timestamp_utc": datetime.utcnow().isoformat(),
+        "total_respuestas": len(PARTICIPANT_SUBMISSIONS),
+        "advertencia_metodologica": "Registro temporal en memoria. En Render puede perderse si el servicio se reinicia.",
+        "uso": "Demo funcional para cerrar el circuito participante-investigador."
+    }
+
+    add_metadata_sheet(wb, metadata)
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output
+
+
 # ============================================================
 # INTERFAZ WEB
 # ============================================================
@@ -1378,12 +1390,8 @@ def home():
             padding: 22px;
             border-radius: 16px;
         }
-        .role-card h3 {
-            margin-top: 0;
-        }
-        .hidden {
-            display: none;
-        }
+        .role-card h3 { margin-top: 0; }
+        .hidden { display: none; }
         .topbar {
             display: flex;
             gap: 10px;
@@ -1403,6 +1411,13 @@ def home():
             border-radius: 14px;
             margin-bottom: 18px;
         }
+        .admin-box {
+            background: #fff7ed;
+            border: 1px solid #fed7aa;
+            padding: 15px;
+            border-radius: 12px;
+            margin-bottom: 15px;
+        }
     </style>
 </head>
 <body>
@@ -1410,7 +1425,7 @@ def home():
 
     <div id="roleScreen">
         <h1>Scriptora</h1>
-        <div class="subtitle">Plataforma para captura, análisis y evaluación investigativa de la escritura y el texto · v0.9</div>
+        <div class="subtitle">Plataforma para captura, análisis y evaluación investigativa de la escritura y el texto · v0.9.1</div>
 
         <div class="role-grid">
             <div class="role-card">
@@ -1446,6 +1461,9 @@ def home():
             <p><strong>Consigna:</strong> Escribe un texto breve en el que expreses tu opinión sobre el uso de la inteligencia artificial en educación.</p>
         </div>
 
+        <label>ID participante opcional</label>
+        <input id="participantId" placeholder="Ejemplo: sujeto_001">
+
         <label>Tu respuesta</label>
         <textarea id="participantText" placeholder="Escribe aquí tu respuesta..."></textarea>
 
@@ -1464,6 +1482,13 @@ def home():
                 <div class="subtitle">Análisis textual, evaluación escritural, proceso, multitexto y exportación Excel</div>
             </div>
             <button class="secondary" onclick="goHome()">Volver</button>
+        </div>
+
+        <div class="admin-box">
+            <strong>Registro de participantes</strong>
+            <p class="note">Descarga las respuestas enviadas desde el modo participante. Registro temporal en memoria.</p>
+            <button class="secondary" onclick="downloadParticipantExcel()">Descargar respuestas de participantes</button>
+            <button class="secondary" onclick="clearParticipantRecords()">Limpiar registros temporales</button>
         </div>
 
         <label>Módulo de análisis</label>
@@ -1592,6 +1617,7 @@ function enterParticipant() {
     document.getElementById("roleScreen").classList.add("hidden");
     document.getElementById("participantScreen").classList.remove("hidden");
     document.getElementById("researcherScreen").classList.add("hidden");
+    document.getElementById("participantConfirmation").style.display = "none";
 }
 
 function enterResearcher() {
@@ -1609,16 +1635,18 @@ function goHome() {
 
 async function submitParticipantResponse() {
     const text = document.getElementById("participantText").value;
+    const participantId = document.getElementById("participantId").value;
 
     if (!text.trim()) {
         alert("Por favor escribe una respuesta antes de enviar.");
         return;
     }
 
-    await fetch("/api/write/evaluate", {
+    const response = await fetch("/api/participant/submit", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
+            participant_id: participantId,
             text: text,
             language: "es",
             level: "general",
@@ -1628,8 +1656,51 @@ async function submitParticipantResponse() {
         })
     });
 
+    if (!response.ok) {
+        alert("No se pudo registrar la respuesta.");
+        return;
+    }
+
     document.getElementById("participantText").value = "";
     document.getElementById("participantConfirmation").style.display = "block";
+}
+
+async function downloadParticipantExcel() {
+    const response = await fetch("/api/participant/export-excel", {
+        method: "GET"
+    });
+
+    if (!response.ok) {
+        alert("No se pudo generar el Excel de participantes.");
+        return;
+    }
+
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "scriptora_respuestas_participantes_v0_9_1.xlsx";
+    document.body.appendChild(a);
+    a.click();
+
+    a.remove();
+    window.URL.revokeObjectURL(url);
+}
+
+async function clearParticipantRecords() {
+    const ok = confirm("¿Seguro que quieres limpiar los registros temporales de participantes?");
+    if (!ok) return;
+
+    const response = await fetch("/api/participant/clear", {
+        method: "POST"
+    });
+
+    if (response.ok) {
+        alert("Registros temporales eliminados.");
+    } else {
+        alert("No se pudieron limpiar los registros.");
+    }
 }
 
 function currentModule() {
@@ -1724,9 +1795,7 @@ function handleModuleChange() {
 }
 
 function startSessionIfNeeded() {
-    if (!isProcessModule()) {
-        return;
-    }
+    if (!isProcessModule()) return;
 
     if (!sessionStarted && !processClosed) {
         sessionStarted = true;
@@ -1781,13 +1850,8 @@ document.addEventListener("DOMContentLoaded", function() {
     });
 
     textarea.addEventListener("input", function() {
-        if (!isProcessModule()) {
-            return;
-        }
-
-        if (processClosed) {
-            return;
-        }
+        if (!isProcessModule()) return;
+        if (processClosed) return;
 
         startSessionIfNeeded();
 
@@ -1817,13 +1881,8 @@ document.addEventListener("DOMContentLoaded", function() {
             editCount += 1;
             expansionCount += 1;
 
-            if (delta <= 15) {
-                localAdjustmentCount += 1;
-            }
-
-            if (delta >= REFORMULATION_DELTA) {
-                reformulationCount += 1;
-            }
+            if (delta <= 15) localAdjustmentCount += 1;
+            if (delta >= REFORMULATION_DELTA) reformulationCount += 1;
         }
 
         if (delta < 0) {
@@ -1832,13 +1891,8 @@ document.addEventListener("DOMContentLoaded", function() {
             editCount += 1;
             reductionCount += 1;
 
-            if (absDelta <= 15) {
-                localAdjustmentCount += 1;
-            }
-
-            if (absDelta >= REFORMULATION_DELTA) {
-                reformulationCount += 1;
-            }
+            if (absDelta <= 15) localAdjustmentCount += 1;
+            if (absDelta >= REFORMULATION_DELTA) reformulationCount += 1;
         }
 
         if (currentParagraphCount !== previousParagraphCount && inputEventCount > 1) {
@@ -2163,7 +2217,7 @@ async function downloadExcel() {
 
         const a = document.createElement("a");
         a.href = url;
-        a.download = "scriptora_multitexto_v0_9.xlsx";
+        a.download = "scriptora_multitexto_v0_9_1.xlsx";
         document.body.appendChild(a);
         a.click();
 
@@ -2218,7 +2272,7 @@ async function downloadExcel() {
 
     const a = document.createElement("a");
     a.href = url;
-    a.download = "scriptora_resultados_v0_9.xlsx";
+    a.download = "scriptora_resultados_v0_9_1.xlsx";
     document.body.appendChild(a);
     a.click();
 
@@ -2240,8 +2294,9 @@ def health():
     return {
         "status": "ok",
         "service": "Scriptora Suite",
-        "version": "0.9.0",
-        "timestamp": datetime.utcnow().isoformat()
+        "version": "0.9.1",
+        "timestamp": datetime.utcnow().isoformat(),
+        "participant_submissions": len(PARTICIPANT_SUBMISSIONS)
     }
 
 
@@ -2251,7 +2306,7 @@ def analyze_text(request: TextAnalysisRequest):
 
     return {
         "module": "Scriptora T · Text Analysis",
-        "version": "0.9.0",
+        "version": "0.9.1",
         "language": request.language,
         "context": request.context,
         "level": request.level,
@@ -2279,7 +2334,7 @@ def evaluate_writing(request: WritingEvaluationRequest):
 
     return {
         "module": "Scriptora W · Writing Product Evaluation",
-        "version": "0.9.0",
+        "version": "0.9.1",
         "language": request.language,
         "level": request.level,
         "genre": request.genre,
@@ -2305,7 +2360,7 @@ def evaluate_writing_process(request: WritingProcessRequest):
 
     return {
         "module": "Scriptora W · Product + Process Evaluation",
-        "version": "0.9.0",
+        "version": "0.9.1",
         "language": request.language,
         "level": request.level,
         "genre": request.genre,
@@ -2325,12 +2380,59 @@ def multi_analyze(request: MultiTextRequest):
 
     return {
         "module": module_label,
-        "version": "0.9.0",
+        "version": "0.9.1",
         "total_texts": len(results),
         "language": request.language,
         "level": request.level,
         "genre": request.genre,
         "results": results
+    }
+
+
+@app.post("/api/participant/submit")
+def participant_submit(request: ParticipantSubmissionRequest):
+    record = create_participant_record(request)
+
+    return {
+        "status": "ok",
+        "message": "Respuesta registrada correctamente.",
+        "submission_id": record["submission_id"],
+        "participant_id": record["participant_id"],
+        "total_submissions": len(PARTICIPANT_SUBMISSIONS)
+    }
+
+
+@app.get("/api/participant/list")
+def participant_list():
+    return {
+        "status": "ok",
+        "total_submissions": len(PARTICIPANT_SUBMISSIONS),
+        "records": PARTICIPANT_SUBMISSIONS
+    }
+
+
+@app.get("/api/participant/export-excel")
+def participant_export_excel():
+    output = create_participant_excel()
+    filename = f"scriptora_respuestas_participantes_v0_9_1_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
+
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}"
+        }
+    )
+
+
+@app.post("/api/participant/clear")
+def participant_clear():
+    PARTICIPANT_SUBMISSIONS.clear()
+
+    return {
+        "status": "ok",
+        "message": "Registros temporales eliminados.",
+        "total_submissions": len(PARTICIPANT_SUBMISSIONS)
     }
 
 
@@ -2345,7 +2447,7 @@ def export_excel(request: ExcelExportRequest):
     resultados = {
         "analysis_id": analysis_id,
         "timestamp_utc": timestamp,
-        "scriptora_version": "0.9.0",
+        "scriptora_version": "0.9.1",
         "selected_module": selected_module,
         "language": request.language,
         "level": request.level,
@@ -2403,8 +2505,8 @@ def export_excel(request: ExcelExportRequest):
     metadatos = {
         "analysis_id": analysis_id,
         "timestamp_utc": timestamp,
-        "scriptora_version": "0.9.0",
-        "archivo_generado": "scriptora_resultados_v0_9.xlsx",
+        "scriptora_version": "0.9.1",
+        "archivo_generado": "scriptora_resultados_v0_9_1.xlsx",
         "hoja_resultados_vertical": "Resultados en formato vertical legible.",
         "hoja_matriz_analisis": "Resultados en formato horizontal para análisis estadístico.",
         "hoja_diccionario_variables": "Definiciones operativas de las variables incluidas.",
@@ -2420,7 +2522,7 @@ def export_excel(request: ExcelExportRequest):
 
     output = create_single_analysis_excel(excel_data)
 
-    filename = f"scriptora_resultados_v0_9_{analysis_id[:8]}.xlsx"
+    filename = f"scriptora_resultados_v0_9_1_{analysis_id[:8]}.xlsx"
 
     return StreamingResponse(
         output,
@@ -2441,8 +2543,8 @@ def export_multi_excel(request: MultiExcelExportRequest):
     metadata = {
         "analysis_id": analysis_id,
         "timestamp_utc": timestamp,
-        "scriptora_version": "0.9.0",
-        "archivo_generado": "scriptora_multitexto_v0_9.xlsx",
+        "scriptora_version": "0.9.1",
+        "archivo_generado": "scriptora_multitexto_v0_9_1.xlsx",
         "selected_module": request.selected_module,
         "language": request.language,
         "level": request.level,
@@ -2457,7 +2559,7 @@ def export_multi_excel(request: MultiExcelExportRequest):
 
     output = create_multi_analysis_excel(rows, metadata)
 
-    filename = f"scriptora_multitexto_v0_9_{analysis_id[:8]}.xlsx"
+    filename = f"scriptora_multitexto_v0_9_1_{analysis_id[:8]}.xlsx"
 
     return StreamingResponse(
         output,
@@ -2503,8 +2605,8 @@ def list_benchmarks():
                 "status": "prototype"
             },
             {
-                "benchmark_id": "ES_ROLE_BASED_INTERFACE_V1",
-                "module": "Scriptora · Roles",
+                "benchmark_id": "ES_PARTICIPANT_REGISTRY_V1",
+                "module": "Scriptora · Registro participantes",
                 "language": "es",
                 "status": "prototype"
             }
