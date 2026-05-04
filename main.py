@@ -12,7 +12,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
 
-SCRIPTORA_VERSION = "0.9.5"
+SCRIPTORA_VERSION = "0.9.6"
 
 
 app = FastAPI(
@@ -1635,29 +1635,29 @@ const REFORMULATION_DELTA = 20;
 
 let participantStartTime = null;
 
-function countWordsSimple(text) {
-    return text.trim().split(/\s+/).filter(w => w.length > 0).length;
-}
+function countWordsSimple(text) {{
+    return text.trim().split(/\\s+/).filter(w => w.length > 0).length;
+}}
 
-function updateParticipantWordCounter() {
+function updateParticipantWordCounter() {{
     const text = document.getElementById("participantText").value;
     const count = countWordsSimple(text);
     const counter = document.getElementById("participantWordCounter");
     if (!counter) return;
 
     let status = "mínimo requerido: 50 · rango sugerido: 80–120";
-    if (count < 50) {
+    if (count < 50) {{
         status = "faltan " + (50 - count) + " palabras para poder enviar";
-    } else if (count < 80) {
+    }} else if (count < 80) {{
         status = "ya puedes enviar · sugerido: agregar " + (80 - count) + " palabras";
-    } else if (count <= 120) {
+    }} else if (count <= 120) {{
         status = "rango sugerido logrado";
-    } else {
+    }} else {{
         status = "sobre el rango sugerido";
-    }
+    }}
 
     counter.innerText = "Palabras: " + count + " · " + status;
-}
+}}
 
 function enterParticipant() {{
     document.getElementById("roleScreen").classList.add("hidden");
