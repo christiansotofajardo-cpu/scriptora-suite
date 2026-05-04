@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 from datetime import datetime
@@ -7,20 +7,20 @@ import uuid
 import re
 import string
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
 
 app = FastAPI(
     title="Scriptora Suite API",
-    description="Scriptora Suite: plataforma para análisis textual, escritura, proceso escritural, multitexto, registro de participantes y exportación Excel por roles.",
-    version="0.9.1"
+    description="Scriptora Suite: análisis textual, escritura, proceso, participantes, corpus Excel y exportación.",
+    version="0.9.2"
 )
 
 
 # ============================================================
-# ALMACENAMIENTO TEMPORAL EN MEMORIA
+# ALMACENAMIENTO TEMPORAL
 # ============================================================
 
 PARTICIPANT_SUBMISSIONS = []
@@ -398,7 +398,8 @@ def score_writing_product(text, words=None, sentences=None, genre="general"):
 
     interpretation = (
         f"El desempeño escritural preliminar se ubica en nivel {level_label}. "
-        f"La evaluación considera extensión, organización, cohesión, sintaxis, diversidad léxica, densidad informativa, elaboración de ideas, coherencia global, adecuación al género y cierre textual. "
+        f"La evaluación considera extensión, organización, cohesión, sintaxis, diversidad léxica, "
+        f"densidad informativa, elaboración de ideas, coherencia global, adecuación al género y cierre textual. "
         f"{genre_comment} "
         f"Esta estimación es exploratoria y deberá calibrarse con rúbricas humanas, benchmarks y datos TRUNAJOD."
     )
@@ -640,7 +641,6 @@ def parse_multitext_input(raw_input: str):
 
     pattern = r"###\s*ID:\s*(.+)"
     matches = list(re.finditer(pattern, raw_input))
-
     records = []
 
     if not matches:
@@ -715,16 +715,39 @@ def create_participant_record(request: ParticipantSubmissionRequest):
         genre=request.genre or "argumentativo"
     )
 
-    record = {
-        "submission_id": submission_id,
-        "participant_id": participant_id,
-        "timestamp_utc": timestamp,
-        "language": request.language,
-        "level": request.level,
-        "genre": request.genre,
-        "task": request.task,
-        "purpose": request.purpose,
-        "texto_original": text,
+    record = flatten_product_record(
+        source={
+            "submission_id": submission_id,
+            "participant_id": participant_id,
+            "timestamp_utc": timestamp,
+            "language": request.language,
+            "level": request.level,
+            "genre": request.genre,
+            "task": request.task,
+            "purpose": request.purpose,
+            "texto_original": text
+        },
+        product_metrics=product_metrics
+    )
+
+    PARTICIPANT_SUBMISSIONS.append(record)
+    return record
+
+
+# ============================================================
+# CORPUS EXCEL
+# ============================================================
+
+def normalize_header(value):
+    if value is None:
+        return ""
+    return str(value).strip().lower().replace(" ", "_")
+
+
+def flatten_product_record(source, product_metrics):
+    record = dict(source)
+
+    record.update({
         "word_count": product_metrics.get("word_count"),
         "sentence_count": product_metrics.get("sentence_count"),
         "paragraph_count": product_metrics.get("paragraph_count"),
@@ -750,11 +773,58 @@ def create_participant_record(request: ParticipantSubmissionRequest):
         "scores_global_writing_score": product_metrics.get("scores", {}).get("global_writing_score"),
         "level_label": product_metrics.get("level_label"),
         "interpretation_product": product_metrics.get("interpretation")
-    }
-
-    PARTICIPANT_SUBMISSIONS.append(record)
+    })
 
     return record
+
+
+def process_corpus_excel(file_bytes: bytes):
+    wb_in = load_workbook(BytesIO(file_bytes), data_only=True)
+    ws = wb_in.active
+
+    headers = []
+    for cell in ws[1]:
+        headers.append(normalize_header(cell.value))
+
+    if "texto" not in headers and "text" not in headers:
+        raise ValueError("El Excel debe incluir una columna llamada 'texto' o 'text'.")
+
+    text_col = "texto" if "texto" in headers else "text"
+    text_idx = headers.index(text_col)
+
+    rows = []
+
+    for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=1):
+        original = {}
+        for h, v in zip(headers, row):
+            if h:
+                original[h] = v if v is not None else ""
+
+        text = str(row[text_idx]).strip() if row[text_idx] is not None else ""
+
+        if not text:
+            continue
+
+        item_id = original.get("id") or original.get("participant_id") or f"texto_{row_idx:03d}"
+        genre = original.get("genero") or original.get("genre") or "general"
+        level = original.get("nivel") or original.get("level") or "general"
+
+        source = dict(original)
+        source["id"] = item_id
+        source["texto_original"] = text
+        source["genre_used"] = genre
+        source["level_used"] = level
+
+        product_metrics = score_writing_product(text=text, genre=str(genre).lower())
+
+        output_row = flatten_product_record(
+            source=source,
+            product_metrics=product_metrics
+        )
+
+        rows.append(output_row)
+
+    return rows
 
 
 # ============================================================
@@ -788,6 +858,18 @@ def flatten_dict(data, prefix=""):
 def build_variable_dictionary():
     return [
         {
+            "variable": "id",
+            "nombre_amigable": "ID del texto",
+            "modulo": "Corpus / Multitexto",
+            "dimension": "Identificación",
+            "descripcion": "Identificador del texto, sujeto o registro analizado.",
+            "como_se_calcula": "Asignado por el usuario o generado automáticamente.",
+            "tipo_valor": "Texto",
+            "rango_esperado": "Variable",
+            "interpretacion_general": "Permite vincular resultados con sujetos, textos o registros.",
+            "observaciones": "Clave para análisis por corpus."
+        },
+        {
             "variable": "participant_id",
             "nombre_amigable": "ID del participante",
             "modulo": "Participante",
@@ -797,7 +879,7 @@ def build_variable_dictionary():
             "tipo_valor": "Texto",
             "rango_esperado": "Variable",
             "interpretacion_general": "Permite vincular respuestas con participantes.",
-            "observaciones": "En investigación real debe definirse un protocolo de anonimización."
+            "observaciones": "En investigación real debe definirse anonimización."
         },
         {
             "variable": "submission_id",
@@ -810,18 +892,6 @@ def build_variable_dictionary():
             "rango_esperado": "Variable",
             "interpretacion_general": "Permite rastrear cada envío.",
             "observaciones": "Útil cuando un participante responde más de una tarea."
-        },
-        {
-            "variable": "id",
-            "nombre_amigable": "ID del texto",
-            "modulo": "Multitexto",
-            "dimension": "Identificación",
-            "descripcion": "Identificador del texto o sujeto analizado.",
-            "como_se_calcula": "Asignado por el usuario o generado automáticamente.",
-            "tipo_valor": "Texto",
-            "rango_esperado": "Variable",
-            "interpretacion_general": "Permite vincular resultados con sujetos, textos o registros.",
-            "observaciones": "Clave para análisis por corpus."
         },
         {
             "variable": "analysis_id",
@@ -848,6 +918,18 @@ def build_variable_dictionary():
             "observaciones": "Está en horario UTC."
         },
         {
+            "variable": "texto_original",
+            "nombre_amigable": "Texto original",
+            "modulo": "Todos",
+            "dimension": "Entrada",
+            "descripcion": "Texto ingresado por el usuario o cargado desde corpus.",
+            "como_se_calcula": "Se conserva el texto enviado.",
+            "tipo_valor": "Texto",
+            "rango_esperado": "Variable",
+            "interpretacion_general": "Permite revisar manualmente el insumo.",
+            "observaciones": "Debe manejarse con cuidado si contiene información sensible."
+        },
+        {
             "variable": "word_count",
             "nombre_amigable": "Número de palabras",
             "modulo": "Scriptora T / Scriptora W Producto",
@@ -857,7 +939,7 @@ def build_variable_dictionary():
             "tipo_valor": "Entero",
             "rango_esperado": "0 en adelante",
             "interpretacion_general": "Mayor extensión puede sugerir mayor desarrollo textual, aunque no implica necesariamente mejor calidad.",
-            "observaciones": "Debe interpretarse según nivel, tarea, género textual y propósito comunicativo."
+            "observaciones": "Debe interpretarse según nivel, tarea y género."
         },
         {
             "variable": "char_count",
@@ -869,7 +951,7 @@ def build_variable_dictionary():
             "tipo_valor": "Entero",
             "rango_esperado": "0 en adelante",
             "interpretacion_general": "Permite estimar longitud bruta del texto.",
-            "observaciones": "Incluye espacios y signos según el texto ingresado."
+            "observaciones": "Incluye espacios y signos."
         },
         {
             "variable": "sentence_count",
@@ -904,7 +986,7 @@ def build_variable_dictionary():
             "como_se_calcula": "word_count / sentence_count",
             "tipo_valor": "Decimal",
             "rango_esperado": "0 en adelante",
-            "interpretacion_general": "Valores bajos sugieren estructuras simples; valores muy altos pueden aumentar la complejidad.",
+            "interpretacion_general": "Valores bajos sugieren estructuras simples; valores altos pueden aumentar complejidad.",
             "observaciones": "Debe interpretarse según edad, género y tarea."
         },
         {
@@ -912,12 +994,12 @@ def build_variable_dictionary():
             "nombre_amigable": "Palabras únicas",
             "modulo": "Scriptora T / Scriptora W Producto",
             "dimension": "Diversidad léxica",
-            "descripcion": "Cantidad de formas léxicas distintas presentes en el texto.",
+            "descripcion": "Cantidad de formas léxicas distintas.",
             "como_se_calcula": "Conteo de tokens únicos.",
             "tipo_valor": "Entero",
             "rango_esperado": "0 en adelante",
             "interpretacion_general": "Aporta información inicial sobre variedad léxica.",
-            "observaciones": "Depende fuertemente de la extensión."
+            "observaciones": "Depende de la extensión."
         },
         {
             "variable": "type_token_ratio",
@@ -929,19 +1011,19 @@ def build_variable_dictionary():
             "tipo_valor": "Decimal",
             "rango_esperado": "0 a 1",
             "interpretacion_general": "Valores más altos sugieren mayor diversidad léxica superficial.",
-            "observaciones": "En textos breves puede sobreestimar la diversidad."
+            "observaciones": "En textos breves puede sobreestimar diversidad."
         },
         {
             "variable": "lexical_density_proxy",
             "nombre_amigable": "Densidad léxica estimada",
             "modulo": "Scriptora T / Scriptora W Producto",
             "dimension": "Densidad informativa",
-            "descripcion": "Proporción estimada de palabras de contenido respecto del total.",
+            "descripcion": "Proporción estimada de palabras de contenido.",
             "como_se_calcula": "Palabras no funcionales / total de palabras.",
             "tipo_valor": "Decimal",
             "rango_esperado": "0 a 1",
             "interpretacion_general": "Valores altos sugieren mayor concentración informativa.",
-            "observaciones": "Es una aproximación inicial."
+            "observaciones": "Aproximación inicial."
         },
         {
             "variable": "connector_count",
@@ -954,6 +1036,18 @@ def build_variable_dictionary():
             "rango_esperado": "0 en adelante",
             "interpretacion_general": "Más conectores pueden indicar mayor articulación discursiva.",
             "observaciones": "No evalúa pertinencia semántica."
+        },
+        {
+            "variable": "connectors_found",
+            "nombre_amigable": "Conectores encontrados",
+            "modulo": "Scriptora W Producto",
+            "dimension": "Cohesión",
+            "descripcion": "Lista de conectores identificados.",
+            "como_se_calcula": "Coincidencia con lista preliminar.",
+            "tipo_valor": "Texto",
+            "rango_esperado": "Variable",
+            "interpretacion_general": "Permite observar recursos cohesivos usados.",
+            "observaciones": "No distingue función ni calidad de uso."
         },
         {
             "variable": "scores_global_writing_score",
@@ -980,16 +1074,16 @@ def build_variable_dictionary():
             "observaciones": "Los puntos de corte son prototípicos."
         },
         {
-            "variable": "texto_original",
-            "nombre_amigable": "Texto original",
-            "modulo": "Todos",
-            "dimension": "Entrada",
-            "descripcion": "Texto ingresado por el usuario.",
-            "como_se_calcula": "Se conserva el texto enviado.",
+            "variable": "interpretation_product",
+            "nombre_amigable": "Interpretación del producto",
+            "modulo": "Scriptora W Producto",
+            "dimension": "Interpretación",
+            "descripcion": "Comentario interpretativo preliminar sobre el producto escrito.",
+            "como_se_calcula": "Reglas interpretativas basadas en métricas y puntajes.",
             "tipo_valor": "Texto",
             "rango_esperado": "Variable",
-            "interpretacion_general": "Permite revisar manualmente el insumo.",
-            "observaciones": "Debe manejarse con cuidado si contiene información sensible."
+            "interpretacion_general": "Sintetiza el resultado para lectura cualitativa.",
+            "observaciones": "Requiere validación empírica."
         }
     ]
 
@@ -1041,24 +1135,6 @@ def get_dictionary_info(variable):
     return dictionary_map.get(clean_variable, {})
 
 
-def build_results_vertical_rows(flat_results):
-    rows = []
-
-    for variable, value in flat_results.items():
-        dict_info = get_dictionary_info(variable)
-
-        rows.append({
-            "variable": variable,
-            "valor": safe_value(value),
-            "nombre_amigable": dict_info.get("nombre_amigable", ""),
-            "modulo": dict_info.get("modulo", ""),
-            "dimension": dict_info.get("dimension", ""),
-            "descripcion": dict_info.get("descripcion", "")
-        })
-
-    return rows
-
-
 def add_dictionary_sheet(wb):
     ws_dict = wb.create_sheet("diccionario_variables")
     dictionary_rows = build_variable_dictionary()
@@ -1092,6 +1168,24 @@ def add_metadata_sheet(wb, metadata):
         ws_meta.append([key, safe_value(value)])
 
     style_sheet(ws_meta)
+
+
+def build_results_vertical_rows(flat_results):
+    rows = []
+
+    for variable, value in flat_results.items():
+        dict_info = get_dictionary_info(variable)
+
+        rows.append({
+            "variable": variable,
+            "valor": safe_value(value),
+            "nombre_amigable": dict_info.get("nombre_amigable", ""),
+            "modulo": dict_info.get("modulo", ""),
+            "dimension": dict_info.get("dimension", ""),
+            "descripcion": dict_info.get("descripcion", "")
+        })
+
+    return rows
 
 
 def create_single_analysis_excel(export_data):
@@ -1133,11 +1227,11 @@ def create_single_analysis_excel(export_data):
     return output
 
 
-def create_multi_analysis_excel(rows, metadata):
+def create_rows_excel(rows, metadata, matrix_sheet_name="matriz_corpus"):
     wb = Workbook()
 
     ws_matrix = wb.active
-    ws_matrix.title = "matriz_multitexto"
+    ws_matrix.title = matrix_sheet_name
 
     if rows:
         all_headers = []
@@ -1152,71 +1246,20 @@ def create_multi_analysis_excel(rows, metadata):
             ws_matrix.append([safe_value(row.get(h, "")) for h in all_headers])
     else:
         ws_matrix.append(["mensaje"])
-        ws_matrix.append(["No se detectaron textos para analizar."])
+        ws_matrix.append(["No hay registros disponibles."])
 
     style_sheet(ws_matrix)
 
-    ws_readable = wb.create_sheet("resultados_vertical")
-    ws_readable.append(["id", "variable", "valor", "nombre_amigable", "modulo", "dimension", "descripcion"])
-
-    for row in rows:
-        text_id = row.get("id", "")
-        flat_row = flatten_dict(row)
-
-        for variable, value in flat_row.items():
-            dict_info = get_dictionary_info(variable)
-
-            ws_readable.append([
-                text_id,
-                variable,
-                safe_value(value),
-                dict_info.get("nombre_amigable", ""),
-                dict_info.get("modulo", ""),
-                dict_info.get("dimension", ""),
-                dict_info.get("descripcion", "")
-            ])
-
-    style_sheet(ws_readable)
-
-    add_dictionary_sheet(wb)
-    add_metadata_sheet(wb, metadata)
-
-    output = BytesIO()
-    wb.save(output)
-    output.seek(0)
-    return output
-
-
-def create_participant_excel():
-    wb = Workbook()
-
-    ws = wb.active
-    ws.title = "respuestas_participantes"
-
-    if PARTICIPANT_SUBMISSIONS:
-        headers = list(PARTICIPANT_SUBMISSIONS[0].keys())
-        ws.append(headers)
-
-        for record in PARTICIPANT_SUBMISSIONS:
-            ws.append([safe_value(record.get(h, "")) for h in headers])
-    else:
-        ws.append(["mensaje"])
-        ws.append(["No hay respuestas de participantes registradas en esta sesión."])
-
-    style_sheet(ws)
-
     ws_vertical = wb.create_sheet("resultados_vertical")
-    ws_vertical.append(["participant_id", "submission_id", "variable", "valor", "nombre_amigable", "modulo", "dimension", "descripcion"])
+    ws_vertical.append(["id", "variable", "valor", "nombre_amigable", "modulo", "dimension", "descripcion"])
 
-    for record in PARTICIPANT_SUBMISSIONS:
-        participant_id = record.get("participant_id", "")
-        submission_id = record.get("submission_id", "")
+    for idx, row in enumerate(rows, start=1):
+        row_id = row.get("id") or row.get("participant_id") or row.get("submission_id") or f"registro_{idx:03d}"
 
-        for variable, value in record.items():
+        for variable, value in row.items():
             dict_info = get_dictionary_info(variable)
             ws_vertical.append([
-                participant_id,
-                submission_id,
+                row_id,
                 variable,
                 safe_value(value),
                 dict_info.get("nombre_amigable", ""),
@@ -1228,21 +1271,50 @@ def create_participant_excel():
     style_sheet(ws_vertical)
 
     add_dictionary_sheet(wb)
-
-    metadata = {
-        "scriptora_version": "0.9.1",
-        "timestamp_utc": datetime.utcnow().isoformat(),
-        "total_respuestas": len(PARTICIPANT_SUBMISSIONS),
-        "advertencia_metodologica": "Registro temporal en memoria. En Render puede perderse si el servicio se reinicia.",
-        "uso": "Demo funcional para cerrar el circuito participante-investigador."
-    }
-
     add_metadata_sheet(wb, metadata)
 
     output = BytesIO()
     wb.save(output)
     output.seek(0)
     return output
+
+
+def create_multi_analysis_excel(rows, metadata):
+    return create_rows_excel(rows, metadata, matrix_sheet_name="matriz_multitexto")
+
+
+def create_participant_excel():
+    metadata = {
+        "scriptora_version": "0.9.2",
+        "timestamp_utc": datetime.utcnow().isoformat(),
+        "total_respuestas": len(PARTICIPANT_SUBMISSIONS),
+        "advertencia_metodologica": "Registro temporal en memoria. En Render puede perderse si el servicio se reinicia.",
+        "uso": "Demo funcional para cerrar el circuito participante-investigador."
+    }
+
+    return create_rows_excel(
+        rows=PARTICIPANT_SUBMISSIONS,
+        metadata=metadata,
+        matrix_sheet_name="respuestas_participantes"
+    )
+
+
+def create_corpus_excel(rows):
+    metadata = {
+        "scriptora_version": "0.9.2",
+        "timestamp_utc": datetime.utcnow().isoformat(),
+        "total_textos": len(rows),
+        "archivo_generado": "scriptora_corpus_resultados_v0_9_2.xlsx",
+        "formato_entrada": "Excel con columna obligatoria texto o text. Columnas opcionales: id, grupo, nivel, genero, observaciones.",
+        "hoja_matriz_corpus": "Una fila por texto procesado, conservando columnas originales más variables Scriptora.",
+        "advertencia_metodologica": "Resultados preliminares; requieren calibración con corpus reales, rúbricas humanas y benchmarks contextuales."
+    }
+
+    return create_rows_excel(
+        rows=rows,
+        metadata=metadata,
+        matrix_sheet_name="matriz_corpus"
+    )
 
 
 # ============================================================
@@ -1338,7 +1410,7 @@ def home():
             font-weight: bold;
         }
         .note {
-            margin-top: 20px;
+            margin-top: 12px;
             font-size: 13px;
             color: #666;
         }
@@ -1418,6 +1490,13 @@ def home():
             border-radius: 12px;
             margin-bottom: 15px;
         }
+        .corpus-box {
+            background: #f0fdf4;
+            border: 1px solid #bbf7d0;
+            padding: 15px;
+            border-radius: 12px;
+            margin-bottom: 15px;
+        }
     </style>
 </head>
 <body>
@@ -1425,7 +1504,7 @@ def home():
 
     <div id="roleScreen">
         <h1>Scriptora</h1>
-        <div class="subtitle">Plataforma para captura, análisis y evaluación investigativa de la escritura y el texto · v0.9.1</div>
+        <div class="subtitle">Plataforma para captura, análisis y evaluación investigativa de la escritura y el texto · v0.9.2</div>
 
         <div class="role-grid">
             <div class="role-card">
@@ -1479,7 +1558,7 @@ def home():
         <div class="topbar">
             <div>
                 <h1>Scriptora Investigador</h1>
-                <div class="subtitle">Análisis textual, evaluación escritural, proceso, multitexto y exportación Excel</div>
+                <div class="subtitle">Análisis textual, evaluación escritural, proceso, multitexto, corpus Excel y exportación</div>
             </div>
             <button class="secondary" onclick="goHome()">Volver</button>
         </div>
@@ -1489,6 +1568,13 @@ def home():
             <p class="note">Descarga las respuestas enviadas desde el modo participante. Registro temporal en memoria.</p>
             <button class="secondary" onclick="downloadParticipantExcel()">Descargar respuestas de participantes</button>
             <button class="secondary" onclick="clearParticipantRecords()">Limpiar registros temporales</button>
+        </div>
+
+        <div class="corpus-box">
+            <strong>Carga de corpus Excel</strong>
+            <p class="note">Sube un archivo .xlsx con columna obligatoria <strong>texto</strong>. Columnas opcionales: id, grupo, nivel, genero, observaciones.</p>
+            <input type="file" id="corpusFile" accept=".xlsx">
+            <button class="secondary" onclick="uploadCorpusExcel()">Procesar corpus Excel y descargar resultados</button>
         </div>
 
         <label>Módulo de análisis</label>
@@ -1680,7 +1766,7 @@ async function downloadParticipantExcel() {
 
     const a = document.createElement("a");
     a.href = url;
-    a.download = "scriptora_respuestas_participantes_v0_9_1.xlsx";
+    a.download = "scriptora_respuestas_participantes_v0_9_2.xlsx";
     document.body.appendChild(a);
     a.click();
 
@@ -1701,6 +1787,41 @@ async function clearParticipantRecords() {
     } else {
         alert("No se pudieron limpiar los registros.");
     }
+}
+
+async function uploadCorpusExcel() {
+    const fileInput = document.getElementById("corpusFile");
+
+    if (!fileInput.files || fileInput.files.length === 0) {
+        alert("Por favor selecciona un archivo Excel .xlsx.");
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append("file", fileInput.files[0]);
+
+    const response = await fetch("/api/corpus/upload-excel", {
+        method: "POST",
+        body: formData
+    });
+
+    if (!response.ok) {
+        const msg = await response.text();
+        alert("No se pudo procesar el corpus Excel. Revisa que exista una columna llamada texto. Detalle: " + msg);
+        return;
+    }
+
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "scriptora_corpus_resultados_v0_9_2.xlsx";
+    document.body.appendChild(a);
+    a.click();
+
+    a.remove();
+    window.URL.revokeObjectURL(url);
 }
 
 function currentModule() {
@@ -2217,7 +2338,7 @@ async function downloadExcel() {
 
         const a = document.createElement("a");
         a.href = url;
-        a.download = "scriptora_multitexto_v0_9_1.xlsx";
+        a.download = "scriptora_multitexto_v0_9_2.xlsx";
         document.body.appendChild(a);
         a.click();
 
@@ -2272,7 +2393,7 @@ async function downloadExcel() {
 
     const a = document.createElement("a");
     a.href = url;
-    a.download = "scriptora_resultados_v0_9_1.xlsx";
+    a.download = "scriptora_resultados_v0_9_2.xlsx";
     document.body.appendChild(a);
     a.click();
 
@@ -2294,7 +2415,7 @@ def health():
     return {
         "status": "ok",
         "service": "Scriptora Suite",
-        "version": "0.9.1",
+        "version": "0.9.2",
         "timestamp": datetime.utcnow().isoformat(),
         "participant_submissions": len(PARTICIPANT_SUBMISSIONS)
     }
@@ -2306,7 +2427,7 @@ def analyze_text(request: TextAnalysisRequest):
 
     return {
         "module": "Scriptora T · Text Analysis",
-        "version": "0.9.1",
+        "version": "0.9.2",
         "language": request.language,
         "context": request.context,
         "level": request.level,
@@ -2334,7 +2455,7 @@ def evaluate_writing(request: WritingEvaluationRequest):
 
     return {
         "module": "Scriptora W · Writing Product Evaluation",
-        "version": "0.9.1",
+        "version": "0.9.2",
         "language": request.language,
         "level": request.level,
         "genre": request.genre,
@@ -2360,7 +2481,7 @@ def evaluate_writing_process(request: WritingProcessRequest):
 
     return {
         "module": "Scriptora W · Product + Process Evaluation",
-        "version": "0.9.1",
+        "version": "0.9.2",
         "language": request.language,
         "level": request.level,
         "genre": request.genre,
@@ -2380,7 +2501,7 @@ def multi_analyze(request: MultiTextRequest):
 
     return {
         "module": module_label,
-        "version": "0.9.1",
+        "version": "0.9.2",
         "total_texts": len(results),
         "language": request.language,
         "level": request.level,
@@ -2414,7 +2535,7 @@ def participant_list():
 @app.get("/api/participant/export-excel")
 def participant_export_excel():
     output = create_participant_excel()
-    filename = f"scriptora_respuestas_participantes_v0_9_1_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    filename = f"scriptora_respuestas_participantes_v0_9_2_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
 
     return StreamingResponse(
         output,
@@ -2436,6 +2557,36 @@ def participant_clear():
     }
 
 
+@app.post("/api/corpus/upload-excel")
+async def corpus_upload_excel(file: UploadFile = File(...)):
+    if not file.filename.lower().endswith(".xlsx"):
+        return HTMLResponse(
+            content="El archivo debe tener formato .xlsx",
+            status_code=400
+        )
+
+    try:
+        file_bytes = await file.read()
+        rows = process_corpus_excel(file_bytes)
+        output = create_corpus_excel(rows)
+
+        filename = f"scriptora_corpus_resultados_v0_9_2_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
+
+        return StreamingResponse(
+            output,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}"
+            }
+        )
+
+    except Exception as e:
+        return HTMLResponse(
+            content=f"Error al procesar el corpus Excel: {str(e)}",
+            status_code=400
+        )
+
+
 @app.post("/api/export/excel")
 def export_excel(request: ExcelExportRequest):
     analysis_id = str(uuid.uuid4())
@@ -2447,7 +2598,7 @@ def export_excel(request: ExcelExportRequest):
     resultados = {
         "analysis_id": analysis_id,
         "timestamp_utc": timestamp,
-        "scriptora_version": "0.9.1",
+        "scriptora_version": "0.9.2",
         "selected_module": selected_module,
         "language": request.language,
         "level": request.level,
@@ -2505,8 +2656,8 @@ def export_excel(request: ExcelExportRequest):
     metadatos = {
         "analysis_id": analysis_id,
         "timestamp_utc": timestamp,
-        "scriptora_version": "0.9.1",
-        "archivo_generado": "scriptora_resultados_v0_9_1.xlsx",
+        "scriptora_version": "0.9.2",
+        "archivo_generado": "scriptora_resultados_v0_9_2.xlsx",
         "hoja_resultados_vertical": "Resultados en formato vertical legible.",
         "hoja_matriz_analisis": "Resultados en formato horizontal para análisis estadístico.",
         "hoja_diccionario_variables": "Definiciones operativas de las variables incluidas.",
@@ -2522,7 +2673,7 @@ def export_excel(request: ExcelExportRequest):
 
     output = create_single_analysis_excel(excel_data)
 
-    filename = f"scriptora_resultados_v0_9_1_{analysis_id[:8]}.xlsx"
+    filename = f"scriptora_resultados_v0_9_2_{analysis_id[:8]}.xlsx"
 
     return StreamingResponse(
         output,
@@ -2543,8 +2694,8 @@ def export_multi_excel(request: MultiExcelExportRequest):
     metadata = {
         "analysis_id": analysis_id,
         "timestamp_utc": timestamp,
-        "scriptora_version": "0.9.1",
-        "archivo_generado": "scriptora_multitexto_v0_9_1.xlsx",
+        "scriptora_version": "0.9.2",
+        "archivo_generado": "scriptora_multitexto_v0_9_2.xlsx",
         "selected_module": request.selected_module,
         "language": request.language,
         "level": request.level,
@@ -2559,7 +2710,7 @@ def export_multi_excel(request: MultiExcelExportRequest):
 
     output = create_multi_analysis_excel(rows, metadata)
 
-    filename = f"scriptora_multitexto_v0_9_1_{analysis_id[:8]}.xlsx"
+    filename = f"scriptora_multitexto_v0_9_2_{analysis_id[:8]}.xlsx"
 
     return StreamingResponse(
         output,
@@ -2607,6 +2758,12 @@ def list_benchmarks():
             {
                 "benchmark_id": "ES_PARTICIPANT_REGISTRY_V1",
                 "module": "Scriptora · Registro participantes",
+                "language": "es",
+                "status": "prototype"
+            },
+            {
+                "benchmark_id": "ES_CORPUS_EXCEL_UPLOAD_V1",
+                "module": "Scriptora · Corpus Excel",
                 "language": "es",
                 "status": "prototype"
             }
