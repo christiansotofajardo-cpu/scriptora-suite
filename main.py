@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 from datetime import datetime
@@ -14,8 +14,8 @@ from openpyxl.utils import get_column_letter
 
 app = FastAPI(
     title="Scriptora Suite API",
-    description="Scriptora Suite: análisis textual, escritura, proceso, participantes, corpus Excel y exportación.",
-    version="0.9.2"
+    description="Scriptora Suite: análisis textual, evaluación escritural, proceso, participantes, corpus Excel y exportación.",
+    version="0.9.3"
 )
 
 
@@ -75,12 +75,13 @@ class WritingProcessRequest(BaseModel):
 
 
 class ExcelExportRequest(WritingProcessRequest):
-    selected_module: str = "write_process"
+    analysis_mode: str = "text_analysis"
+    entry_mode: str = "single_text"
 
 
 class MultiTextRequest(BaseModel):
     raw_input: str
-    selected_module: str = "text_multi"
+    analysis_mode: str = "text_analysis"
     language: str = "es"
     level: str | None = "general"
     genre: str | None = "general"
@@ -631,7 +632,7 @@ def integrated_writing_interpretation(product_metrics, process_metrics):
 
 
 # ============================================================
-# MULTITEXTO
+# MULTITEXTO Y CORPUS
 # ============================================================
 
 def parse_multitext_input(raw_input: str):
@@ -665,83 +666,6 @@ def parse_multitext_input(raw_input: str):
             })
 
     return records
-
-
-def analyze_multitext(request: MultiTextRequest):
-    records = parse_multitext_input(request.raw_input)
-    results = []
-
-    for record in records:
-        item_id = record["id"]
-        text = record["text"]
-
-        base = {
-            "id": item_id,
-            "selected_module": request.selected_module,
-            "language": request.language,
-            "level": request.level,
-            "genre": request.genre,
-            "texto_original": text
-        }
-
-        if request.selected_module == "text_multi":
-            metrics = analyze_text_core(text)
-            base.update(metrics)
-            base["module"] = "Scriptora T Multitexto"
-
-        else:
-            product = score_writing_product(text=text, genre=request.genre or "general")
-            flat_product = flatten_dict(product)
-            base.update(flat_product)
-            base["module"] = "Scriptora W Producto Multitexto"
-
-        results.append(base)
-
-    return results
-
-
-# ============================================================
-# PARTICIPANTES
-# ============================================================
-
-def create_participant_record(request: ParticipantSubmissionRequest):
-    submission_id = str(uuid.uuid4())
-    participant_id = request.participant_id.strip() if request.participant_id else f"participante_{len(PARTICIPANT_SUBMISSIONS) + 1:03d}"
-    timestamp = datetime.utcnow().isoformat()
-    text = request.text.strip()
-
-    product_metrics = score_writing_product(
-        text=text,
-        genre=request.genre or "argumentativo"
-    )
-
-    record = flatten_product_record(
-        source={
-            "submission_id": submission_id,
-            "participant_id": participant_id,
-            "timestamp_utc": timestamp,
-            "language": request.language,
-            "level": request.level,
-            "genre": request.genre,
-            "task": request.task,
-            "purpose": request.purpose,
-            "texto_original": text
-        },
-        product_metrics=product_metrics
-    )
-
-    PARTICIPANT_SUBMISSIONS.append(record)
-    return record
-
-
-# ============================================================
-# CORPUS EXCEL
-# ============================================================
-
-def normalize_header(value):
-    if value is None:
-        return ""
-    return str(value).strip().lower().replace(" ", "_")
 
 
 def flatten_product_record(source, product_metrics):
@@ -778,7 +702,61 @@ def flatten_product_record(source, product_metrics):
     return record
 
 
-def process_corpus_excel(file_bytes: bytes):
+def flatten_text_record(source, text_metrics):
+    record = dict(source)
+
+    record.update({
+        "word_count": text_metrics.get("word_count"),
+        "char_count": text_metrics.get("char_count"),
+        "sentence_count": text_metrics.get("sentence_count"),
+        "unique_words": text_metrics.get("unique_words"),
+        "avg_sentence_length": text_metrics.get("avg_sentence_length"),
+        "type_token_ratio": text_metrics.get("type_token_ratio"),
+        "lexical_density_proxy": text_metrics.get("lexical_density_proxy"),
+        "interpretation_text": text_metrics.get("interpretation_text")
+    })
+
+    return record
+
+
+def analyze_multitext(request: MultiTextRequest):
+    records = parse_multitext_input(request.raw_input)
+    results = []
+
+    for record in records:
+        item_id = record["id"]
+        text = record["text"]
+
+        source = {
+            "id": item_id,
+            "analysis_mode": request.analysis_mode,
+            "language": request.language,
+            "level": request.level,
+            "genre": request.genre,
+            "texto_original": text
+        }
+
+        if request.analysis_mode == "text_analysis":
+            metrics = analyze_text_core(text)
+            output_row = flatten_text_record(source, metrics)
+            output_row["module"] = "Scriptora T · Multitexto"
+        else:
+            product = score_writing_product(text=text, genre=request.genre or "general")
+            output_row = flatten_product_record(source, product)
+            output_row["module"] = "Scriptora W · Producto multitexto"
+
+        results.append(output_row)
+
+    return results
+
+
+def normalize_header(value):
+    if value is None:
+        return ""
+    return str(value).strip().lower().replace(" ", "_")
+
+
+def process_corpus_excel(file_bytes: bytes, analysis_mode: str = "writing_product"):
     wb_in = load_workbook(BytesIO(file_bytes), data_only=True)
     ws = wb_in.active
 
@@ -812,19 +790,54 @@ def process_corpus_excel(file_bytes: bytes):
         source = dict(original)
         source["id"] = item_id
         source["texto_original"] = text
+        source["analysis_mode"] = analysis_mode
         source["genre_used"] = genre
         source["level_used"] = level
 
-        product_metrics = score_writing_product(text=text, genre=str(genre).lower())
-
-        output_row = flatten_product_record(
-            source=source,
-            product_metrics=product_metrics
-        )
+        if analysis_mode == "text_analysis":
+            metrics = analyze_text_core(text)
+            output_row = flatten_text_record(source, metrics)
+        else:
+            product_metrics = score_writing_product(text=text, genre=str(genre).lower())
+            output_row = flatten_product_record(source, product_metrics)
 
         rows.append(output_row)
 
     return rows
+
+
+# ============================================================
+# PARTICIPANTES
+# ============================================================
+
+def create_participant_record(request: ParticipantSubmissionRequest):
+    submission_id = str(uuid.uuid4())
+    participant_id = request.participant_id.strip() if request.participant_id else f"participante_{len(PARTICIPANT_SUBMISSIONS) + 1:03d}"
+    timestamp = datetime.utcnow().isoformat()
+    text = request.text.strip()
+
+    product_metrics = score_writing_product(
+        text=text,
+        genre=request.genre or "argumentativo"
+    )
+
+    record = flatten_product_record(
+        source={
+            "submission_id": submission_id,
+            "participant_id": participant_id,
+            "timestamp_utc": timestamp,
+            "language": request.language,
+            "level": request.level,
+            "genre": request.genre,
+            "task": request.task,
+            "purpose": request.purpose,
+            "texto_original": text
+        },
+        product_metrics=product_metrics
+    )
+
+    PARTICIPANT_SUBMISSIONS.append(record)
+    return record
 
 
 # ============================================================
@@ -904,6 +917,30 @@ def build_variable_dictionary():
             "rango_esperado": "Variable",
             "interpretacion_general": "Permite rastrear cada análisis.",
             "observaciones": "Útil para bases con múltiples sujetos."
+        },
+        {
+            "variable": "analysis_mode",
+            "nombre_amigable": "Línea de análisis",
+            "modulo": "Configuración",
+            "dimension": "Diseño analítico",
+            "descripcion": "Indica si el análisis corresponde a texto descriptivo, producto escrito o proceso escritural.",
+            "como_se_calcula": "Seleccionado por el investigador.",
+            "tipo_valor": "Texto",
+            "rango_esperado": "text_analysis / writing_product / writing_process",
+            "interpretacion_general": "Distingue análisis textual de evaluación escritural.",
+            "observaciones": "Clave para evitar mezclar texto y escritura."
+        },
+        {
+            "variable": "entry_mode",
+            "nombre_amigable": "Tipo de entrada",
+            "modulo": "Configuración",
+            "dimension": "Ingreso de datos",
+            "descripcion": "Indica si el dato fue ingresado como texto individual, multitexto, corpus Excel o proceso.",
+            "como_se_calcula": "Seleccionado por el investigador.",
+            "tipo_valor": "Texto",
+            "rango_esperado": "single_text / pasted_multi / corpus_excel / live_process",
+            "interpretacion_general": "Permite identificar la vía de ingreso.",
+            "observaciones": "No todos los modos aplican a todas las líneas de análisis."
         },
         {
             "variable": "timestamp_utc",
@@ -1038,18 +1075,6 @@ def build_variable_dictionary():
             "observaciones": "No evalúa pertinencia semántica."
         },
         {
-            "variable": "connectors_found",
-            "nombre_amigable": "Conectores encontrados",
-            "modulo": "Scriptora W Producto",
-            "dimension": "Cohesión",
-            "descripcion": "Lista de conectores identificados.",
-            "como_se_calcula": "Coincidencia con lista preliminar.",
-            "tipo_valor": "Texto",
-            "rango_esperado": "Variable",
-            "interpretacion_general": "Permite observar recursos cohesivos usados.",
-            "observaciones": "No distingue función ni calidad de uso."
-        },
-        {
             "variable": "scores_global_writing_score",
             "nombre_amigable": "Puntaje global del producto escrito",
             "modulo": "Scriptora W Producto",
@@ -1074,8 +1099,20 @@ def build_variable_dictionary():
             "observaciones": "Los puntos de corte son prototípicos."
         },
         {
+            "variable": "interpretation_text",
+            "nombre_amigable": "Interpretación textual",
+            "modulo": "Scriptora T",
+            "dimension": "Interpretación",
+            "descripcion": "Comentario interpretativo descriptivo sobre el texto.",
+            "como_se_calcula": "Reglas interpretativas basadas en métricas textuales.",
+            "tipo_valor": "Texto",
+            "rango_esperado": "Variable",
+            "interpretacion_general": "Sintetiza características textuales.",
+            "observaciones": "No equivale a evaluación de escritura."
+        },
+        {
             "variable": "interpretation_product",
-            "nombre_amigable": "Interpretación del producto",
+            "nombre_amigable": "Interpretación del producto escrito",
             "modulo": "Scriptora W Producto",
             "dimension": "Interpretación",
             "descripcion": "Comentario interpretativo preliminar sobre el producto escrito.",
@@ -1285,7 +1322,7 @@ def create_multi_analysis_excel(rows, metadata):
 
 def create_participant_excel():
     metadata = {
-        "scriptora_version": "0.9.2",
+        "scriptora_version": "0.9.3",
         "timestamp_utc": datetime.utcnow().isoformat(),
         "total_respuestas": len(PARTICIPANT_SUBMISSIONS),
         "advertencia_metodologica": "Registro temporal en memoria. En Render puede perderse si el servicio se reinicia.",
@@ -1299,12 +1336,13 @@ def create_participant_excel():
     )
 
 
-def create_corpus_excel(rows):
+def create_corpus_excel(rows, analysis_mode):
     metadata = {
-        "scriptora_version": "0.9.2",
+        "scriptora_version": "0.9.3",
         "timestamp_utc": datetime.utcnow().isoformat(),
         "total_textos": len(rows),
-        "archivo_generado": "scriptora_corpus_resultados_v0_9_2.xlsx",
+        "analysis_mode": analysis_mode,
+        "archivo_generado": "scriptora_corpus_resultados_v0_9_3.xlsx",
         "formato_entrada": "Excel con columna obligatoria texto o text. Columnas opcionales: id, grupo, nivel, genero, observaciones.",
         "hoja_matriz_corpus": "Una fila por texto procesado, conservando columnas originales más variables Scriptora.",
         "advertencia_metodologica": "Resultados preliminares; requieren calibración con corpus reales, rúbricas humanas y benchmarks contextuales."
@@ -1413,6 +1451,7 @@ def home():
             margin-top: 12px;
             font-size: 13px;
             color: #666;
+            line-height: 1.4;
         }
         .pill {
             display: inline-block;
@@ -1497,6 +1536,24 @@ def home():
             border-radius: 12px;
             margin-bottom: 15px;
         }
+        .config-box {
+            background: #f8fafc;
+            border: 1px solid #dbe3ef;
+            padding: 15px;
+            border-radius: 12px;
+            margin-bottom: 15px;
+        }
+        .format-box {
+            background: white;
+            border: 1px dashed #94a3b8;
+            padding: 12px;
+            border-radius: 10px;
+            font-family: monospace;
+            font-size: 13px;
+            margin-top: 10px;
+            line-height: 1.5;
+            overflow-x: auto;
+        }
     </style>
 </head>
 <body>
@@ -1504,7 +1561,7 @@ def home():
 
     <div id="roleScreen">
         <h1>Scriptora</h1>
-        <div class="subtitle">Plataforma para captura, análisis y evaluación investigativa de la escritura y el texto · v0.9.2</div>
+        <div class="subtitle">Plataforma para análisis textual, evaluación escritural y proceso de escritura · v0.9.3</div>
 
         <div class="role-grid">
             <div class="role-card">
@@ -1515,7 +1572,7 @@ def home():
 
             <div class="role-card">
                 <h3>Modo investigador</h3>
-                <p>Para analizar textos, productos escritos, procesos de escritura, corpus y descargar Excel.</p>
+                <p>Para analizar textos, evaluar escritura, procesar corpus y descargar resultados en Excel.</p>
                 <button onclick="enterResearcher()">Ingresar como investigador</button>
             </div>
         </div>
@@ -1558,7 +1615,7 @@ def home():
         <div class="topbar">
             <div>
                 <h1>Scriptora Investigador</h1>
-                <div class="subtitle">Análisis textual, evaluación escritural, proceso, multitexto, corpus Excel y exportación</div>
+                <div class="subtitle">Análisis textual, evaluación escritural, corpus Excel y proceso de escritura</div>
             </div>
             <button class="secondary" onclick="goHome()">Volver</button>
         </div>
@@ -1570,31 +1627,50 @@ def home():
             <button class="secondary" onclick="clearParticipantRecords()">Limpiar registros temporales</button>
         </div>
 
-        <div class="corpus-box">
+        <div class="config-box">
+            <strong>Configuración del análisis</strong>
+
+            <label>Línea de análisis</label>
+            <select id="analysisMode" onchange="updateResearcherInterface()">
+                <option value="text_analysis">Scriptora T · Análisis textual descriptivo</option>
+                <option value="writing_product">Scriptora W · Evaluación de producto escrito</option>
+                <option value="writing_process">Scriptora W · Producto + proceso escritural</option>
+            </select>
+
+            <label>Tipo de entrada</label>
+            <select id="entryMode" onchange="updateResearcherInterface()">
+                <option value="single_text">Texto individual</option>
+                <option value="pasted_multi">Multitexto pegado</option>
+                <option value="corpus_excel">Corpus Excel</option>
+                <option value="live_process">Escritura en vivo / proceso</option>
+            </select>
+
+            <div class="note" id="configHelp"></div>
+        </div>
+
+        <div id="corpusSection" class="corpus-box hidden">
             <strong>Carga de corpus Excel</strong>
-            <p class="note">Sube un archivo .xlsx con columna obligatoria <strong>texto</strong>. Columnas opcionales: id, grupo, nivel, genero, observaciones.</p>
+            <p class="note">
+                El archivo debe ser .xlsx y contener una columna obligatoria llamada <strong>texto</strong>.
+                Las columnas <strong>id</strong>, <strong>grupo</strong>, <strong>nivel</strong>, <strong>genero</strong> y <strong>observaciones</strong> son recomendadas.
+            </p>
+
+            <div class="format-box">
+id | texto | grupo | nivel | genero | observaciones<br>
+sujeto_001 | Texto del sujeto... | grupo_A | media | argumentativo | pretest<br>
+sujeto_002 | Texto del sujeto... | grupo_B | universitario | expositivo | postest
+            </div>
+
+            <p class="note">
+                Si el Excel incluye <strong>nivel</strong> y <strong>genero</strong>, Scriptora usará esos valores por fila.
+                Si no existen, usará valores generales. Si no incluye <strong>id</strong>, generará uno automáticamente.
+            </p>
+
             <input type="file" id="corpusFile" accept=".xlsx">
             <button class="secondary" onclick="uploadCorpusExcel()">Procesar corpus Excel y descargar resultados</button>
         </div>
 
-        <label>Módulo de análisis</label>
-        <select id="module" onchange="handleModuleChange()">
-            <option value="text">Scriptora T · Texto individual</option>
-            <option value="write_product">Scriptora W · Producto escrito individual</option>
-            <option value="write_process">Scriptora W · Producto + proceso escritural</option>
-            <option value="text_multi">Scriptora T · Multitexto</option>
-            <option value="write_product_multi">Scriptora W · Producto multitexto</option>
-        </select>
-
-        <div id="writingModeBlock">
-            <label>Modo de ingreso</label>
-            <select id="writingMode">
-                <option value="live">Escribir en vivo / capturar proceso</option>
-                <option value="pasted">Pegar texto ya escrito / solo producto</option>
-            </select>
-        </div>
-
-        <div id="processPanel" class="process-panel">
+        <div id="processPanel" class="process-panel hidden">
             <strong>Registro de proceso escritural</strong>
             <div class="small-grid">
                 <div class="small-box">Tiempo: <span id="timer">0</span> s</div>
@@ -1612,32 +1688,38 @@ def home():
             </div>
         </div>
 
-        <label>Texto a analizar</label>
-        <div id="modeHelp" class="help"></div>
-        <textarea id="textInput" placeholder="Escribe aquí o pega un texto para analizar..."></textarea>
+        <div id="textSection">
+            <label id="textLabel">Texto a analizar</label>
+            <div id="modeHelp" class="help"></div>
+            <textarea id="textInput" placeholder="Escribe aquí o pega un texto para analizar..."></textarea>
+        </div>
 
-        <label>Nivel / audiencia objetivo</label>
-        <select id="level">
-            <option value="general">General</option>
-            <option value="1_4_basico">1°–4° básico</option>
-            <option value="5_8_basico">5°–8° básico</option>
-            <option value="media">Enseñanza media</option>
-            <option value="universitario">Universitario</option>
-            <option value="adulto">Adulto general</option>
-        </select>
+        <div id="selectorSection">
+            <label id="levelLabel">Nivel / audiencia objetivo</label>
+            <select id="level">
+                <option value="general">General</option>
+                <option value="1_4_basico">1°–4° básico</option>
+                <option value="5_8_basico">5°–8° básico</option>
+                <option value="media">Enseñanza media</option>
+                <option value="universitario">Universitario</option>
+                <option value="adulto">Adulto general</option>
+            </select>
 
-        <label>Tipo de texto</label>
-        <select id="genre">
-            <option value="general">General</option>
-            <option value="narrativo">Narrativo</option>
-            <option value="argumentativo">Argumentativo</option>
-            <option value="expositivo">Expositivo</option>
-            <option value="tecnico">Técnico</option>
-        </select>
+            <label id="genreLabel">Tipo de texto</label>
+            <select id="genre">
+                <option value="general">General</option>
+                <option value="narrativo">Narrativo</option>
+                <option value="argumentativo">Argumentativo</option>
+                <option value="expositivo">Expositivo</option>
+                <option value="tecnico">Técnico</option>
+            </select>
+        </div>
 
-        <button onclick="runScriptora()">Analizar con Scriptora</button>
-        <button class="secondary" onclick="downloadExcel()">Descargar Excel</button>
-        <button class="secondary" onclick="resetProcessCapture()">Reiniciar captura</button>
+        <div id="actionSection">
+            <button onclick="runScriptora()">Analizar con Scriptora</button>
+            <button class="secondary" onclick="downloadExcel()">Descargar Excel</button>
+            <button class="secondary" onclick="resetProcessCapture()">Reiniciar captura</button>
+        </div>
 
         <div id="result" class="result">
             <div id="moduleLabel" class="pill"></div>
@@ -1647,7 +1729,7 @@ def home():
             <div id="metrics"></div>
             <div id="scores"></div>
 
-            <div id="processSection" style="display:none;">
+            <div id="processSectionResult" style="display:none;">
                 <h3>Proceso escritural</h3>
                 <div id="processMetrics"></div>
                 <div id="processScores"></div>
@@ -1710,7 +1792,7 @@ function enterResearcher() {
     document.getElementById("roleScreen").classList.add("hidden");
     document.getElementById("participantScreen").classList.add("hidden");
     document.getElementById("researcherScreen").classList.remove("hidden");
-    handleModuleChange();
+    updateResearcherInterface();
 }
 
 function goHome() {
@@ -1762,16 +1844,7 @@ async function downloadParticipantExcel() {
     }
 
     const blob = await response.blob();
-    const url = window.URL.createObjectURL(blob);
-
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "scriptora_respuestas_participantes_v0_9_2.xlsx";
-    document.body.appendChild(a);
-    a.click();
-
-    a.remove();
-    window.URL.revokeObjectURL(url);
+    downloadBlob(blob, "scriptora_respuestas_participantes_v0_9_3.xlsx");
 }
 
 async function clearParticipantRecords() {
@@ -1791,6 +1864,7 @@ async function clearParticipantRecords() {
 
 async function uploadCorpusExcel() {
     const fileInput = document.getElementById("corpusFile");
+    const analysisMode = document.getElementById("analysisMode").value;
 
     if (!fileInput.files || fileInput.files.length === 0) {
         alert("Por favor selecciona un archivo Excel .xlsx.");
@@ -1799,6 +1873,7 @@ async function uploadCorpusExcel() {
 
     const formData = new FormData();
     formData.append("file", fileInput.files[0]);
+    formData.append("analysis_mode", analysisMode);
 
     const response = await fetch("/api/corpus/upload-excel", {
         method: "POST",
@@ -1812,48 +1887,113 @@ async function uploadCorpusExcel() {
     }
 
     const blob = await response.blob();
-    const url = window.URL.createObjectURL(blob);
+    downloadBlob(blob, "scriptora_corpus_resultados_v0_9_3.xlsx");
+}
 
+function downloadBlob(blob, filename) {
+    const url = window.URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "scriptora_corpus_resultados_v0_9_2.xlsx";
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
-
     a.remove();
     window.URL.revokeObjectURL(url);
 }
 
-function currentModule() {
-    return document.getElementById("module").value;
+function currentAnalysisMode() {
+    return document.getElementById("analysisMode").value;
 }
 
-function isProcessModule() {
-    return currentModule() === "write_process";
+function currentEntryMode() {
+    return document.getElementById("entryMode").value;
 }
 
-function isMultiModule() {
-    return currentModule() === "text_multi" || currentModule() === "write_product_multi";
+function isProcessMode() {
+    return currentAnalysisMode() === "writing_process" && currentEntryMode() === "live_process";
 }
 
-function updateModeHelp() {
-    const selectedModule = currentModule();
-    const help = document.getElementById("modeHelp");
+function isMultiMode() {
+    return currentEntryMode() === "pasted_multi";
+}
 
-    if (selectedModule === "text_multi" || selectedModule === "write_product_multi") {
-        help.innerHTML = `
-            Modo multitexto. Usa este formato:<br>
+function isCorpusMode() {
+    return currentEntryMode() === "corpus_excel";
+}
+
+function updateResearcherInterface() {
+    const analysisMode = currentAnalysisMode();
+    const entryModeSelect = document.getElementById("entryMode");
+
+    if (analysisMode === "writing_process") {
+        entryModeSelect.value = "live_process";
+        for (const option of entryModeSelect.options) {
+            option.disabled = option.value !== "live_process";
+        }
+    } else {
+        for (const option of entryModeSelect.options) {
+            option.disabled = option.value === "live_process";
+        }
+        if (entryModeSelect.value === "live_process") {
+            entryModeSelect.value = "single_text";
+        }
+    }
+
+    const entryMode = currentEntryMode();
+
+    document.getElementById("corpusSection").classList.toggle("hidden", entryMode !== "corpus_excel");
+    document.getElementById("textSection").classList.toggle("hidden", entryMode === "corpus_excel");
+    document.getElementById("selectorSection").classList.toggle("hidden", entryMode === "corpus_excel");
+    document.getElementById("actionSection").classList.toggle("hidden", entryMode === "corpus_excel");
+    document.getElementById("processPanel").classList.toggle("hidden", !isProcessMode());
+
+    if (!isProcessMode()) {
+        resetOnlyProcessCounters();
+    }
+
+    let configHelp = "";
+    let modeHelp = "";
+    let textLabel = "Texto a analizar";
+    let levelLabel = "Nivel / audiencia objetivo";
+    let genreLabel = "Tipo de texto";
+
+    if (analysisMode === "text_analysis") {
+        configHelp = "Scriptora T describe el texto como objeto lingüístico. No entrega evaluación de desempeño escritural.";
+    } else if (analysisMode === "writing_product") {
+        configHelp = "Scriptora W evalúa el texto como producto escrito: organización, cohesión, elaboración, género y nivel preliminar.";
+    } else {
+        configHelp = "Scriptora W captura el proceso de escritura en vivo y relaciona producto final con señales de regulación escritural.";
+    }
+
+    if (entryMode === "single_text") {
+        modeHelp = "Modo individual: pega o escribe un texto. Los selectores de nivel y género se aplican a este texto.";
+    } else if (entryMode === "pasted_multi") {
+        modeHelp = `
+            Modo multitexto pegado. Usa este formato:<br>
             ### ID: sujeto_001<br>
             Texto del sujeto 001...<br><br>
             ### ID: sujeto_002<br>
             Texto del sujeto 002...<br><br>
-            También puedes separar textos con una línea que contenga solo ---.
+            También puedes separar textos con una línea que contenga solo ---.<br>
+            Los selectores de nivel y género se aplican como valores comunes para todos los textos.
         `;
-    } else if (selectedModule === "write_process") {
-        help.innerHTML = "Modo proceso: escribe en vivo para capturar tiempo, pausas, ediciones y señales de regulación.";
-    } else {
-        help.innerHTML = "Modo individual: pega o escribe un texto para analizar. No se captura proceso ni tiempo.";
+        textLabel = "Multitexto a analizar";
+        levelLabel = "Nivel común para todos los textos";
+        genreLabel = "Tipo de texto común para todos los textos";
+    } else if (entryMode === "corpus_excel") {
+        configHelp += " En corpus Excel, si existen columnas nivel y genero, esos valores tienen prioridad por fila.";
+    } else if (entryMode === "live_process") {
+        modeHelp = "Modo proceso: escribe en vivo para capturar tiempo, pausas, ediciones y señales preliminares de regulación.";
+        textLabel = "Texto escrito en vivo";
     }
+
+    document.getElementById("configHelp").innerText = configHelp;
+    document.getElementById("modeHelp").innerHTML = modeHelp;
+    document.getElementById("textLabel").innerText = textLabel;
+    document.getElementById("levelLabel").innerText = levelLabel;
+    document.getElementById("genreLabel").innerText = genreLabel;
+
+    document.getElementById("result").style.display = "none";
 }
 
 function resetOnlyProcessCounters() {
@@ -1891,32 +2031,8 @@ function resetOnlyProcessCounters() {
     updatePanel();
 }
 
-function updateProcessPanelVisibility() {
-    const processPanel = document.getElementById("processPanel");
-    const writingModeBlock = document.getElementById("writingModeBlock");
-    const writingMode = document.getElementById("writingMode");
-
-    if (isProcessModule()) {
-        processPanel.style.display = "block";
-        writingModeBlock.style.display = "block";
-        writingMode.disabled = false;
-    } else {
-        resetOnlyProcessCounters();
-        processPanel.style.display = "none";
-        writingModeBlock.style.display = "none";
-        writingMode.value = "pasted";
-        writingMode.disabled = true;
-    }
-}
-
-function handleModuleChange() {
-    updateModeHelp();
-    updateProcessPanelVisibility();
-    document.getElementById("result").style.display = "none";
-}
-
 function startSessionIfNeeded() {
-    if (!isProcessModule()) return;
+    if (!isProcessMode()) return;
 
     if (!sessionStarted && !processClosed) {
         sessionStarted = true;
@@ -1926,7 +2042,7 @@ function startSessionIfNeeded() {
 }
 
 function updateTimer() {
-    if (startTime && !processClosed && isProcessModule()) {
+    if (startTime && !processClosed && isProcessMode()) {
         const seconds = Math.floor((Date.now() - startTime) / 1000);
         document.getElementById("timer").innerText = seconds;
     }
@@ -1959,19 +2075,19 @@ document.addEventListener("DOMContentLoaded", function() {
     const textarea = document.getElementById("textInput");
 
     textarea.addEventListener("focus", function() {
-        if (isProcessModule()) {
+        if (isProcessMode()) {
             startSessionIfNeeded();
         }
     });
 
     textarea.addEventListener("paste", function() {
-        if (isProcessModule()) {
-            document.getElementById("writingMode").value = "pasted";
+        if (isProcessMode()) {
+            alert("Para capturar proceso, escribe en vivo. Si pegas texto, el proceso no será trazable.");
         }
     });
 
     textarea.addEventListener("input", function() {
-        if (!isProcessModule()) return;
+        if (!isProcessMode()) return;
         if (processClosed) return;
 
         startSessionIfNeeded();
@@ -2030,10 +2146,12 @@ document.addEventListener("DOMContentLoaded", function() {
 
         updatePanel();
     });
+
+    updateResearcherInterface();
 });
 
 function freezeProcess() {
-    if (!isProcessModule()) {
+    if (!isProcessMode()) {
         resetOnlyProcessCounters();
         return;
     }
@@ -2060,8 +2178,8 @@ function resetProcessCapture() {
 }
 
 async function runScriptora() {
-    const selectedModule = currentModule();
-    const writingMode = document.getElementById("writingMode").value;
+    const analysisMode = currentAnalysisMode();
+    const entryMode = currentEntryMode();
     const text = document.getElementById("textInput").value;
     const level = document.getElementById("level").value;
     const genre = document.getElementById("genre").value;
@@ -2072,16 +2190,16 @@ async function runScriptora() {
     }
 
     document.getElementById("result").style.display = "block";
-    document.getElementById("processSection").style.display = "none";
+    document.getElementById("processSectionResult").style.display = "none";
     document.getElementById("integratedSection").style.display = "none";
 
-    if (isMultiModule()) {
+    if (entryMode === "pasted_multi") {
         const response = await fetch("/api/multi/analyze", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({
                 raw_input: text,
-                selected_module: selectedModule,
+                analysis_mode: analysisMode,
                 language: "es",
                 level: level,
                 genre: genre,
@@ -2095,7 +2213,7 @@ async function runScriptora() {
         document.getElementById("productTitle").innerText = "Resultado multitexto";
         document.getElementById("metrics").innerHTML = `
             <div class="metric"><strong>Textos procesados:</strong> ${data.total_texts}</div>
-            <div class="metric"><strong>Módulo:</strong> ${data.module}</div>
+            <div class="metric"><strong>Línea de análisis:</strong> ${analysisMode}</div>
         `;
 
         document.getElementById("scores").innerHTML = renderMultiPreview(data.results);
@@ -2103,73 +2221,25 @@ async function runScriptora() {
         return;
     }
 
-    if (selectedModule === "write_process" && !processClosed) {
-        freezeProcess();
-    }
+    if (analysisMode === "text_analysis") {
+        const response = await fetch("/api/text/analyze", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                text: text,
+                language: "es",
+                context: "scriptora_suite",
+                level: level,
+                genre: genre,
+                purpose: "text_analysis"
+            })
+        });
 
-    let endpoint = "/api/text/analyze";
-    let payload = {
-        text: text,
-        language: "es",
-        context: "scriptora_suite",
-        level: level,
-        genre: genre,
-        purpose: "preliminary_analysis"
-    };
-
-    if (selectedModule === "write_product") {
-        endpoint = "/api/write/evaluate";
-        payload = {
-            text: text,
-            language: "es",
-            level: level,
-            genre: genre,
-            task: "open_writing_task",
-            purpose: "preliminary_writing_evaluation"
-        };
-    }
-
-    if (selectedModule === "write_process") {
-        endpoint = "/api/write/process-evaluate";
-        payload = {
-            text: text,
-            language: "es",
-            level: level,
-            genre: genre,
-            task: "open_writing_task",
-            purpose: "preliminary_process_writing_evaluation",
-            writing_mode: writingMode,
-            total_time_seconds: finalTotalTimeSeconds,
-            initial_latency_seconds: finalInitialLatencySeconds,
-            pause_count: longPauseCount,
-            long_pause_count: longPauseCount,
-            edit_count: editCount,
-            deletion_count: deletionCount,
-            insertion_count: insertionCount,
-            local_adjustment_count: localAdjustmentCount,
-            reformulation_count: reformulationCount,
-            expansion_count: expansionCount,
-            reduction_count: reductionCount,
-            macro_adjustment_count: macroAdjustmentCount,
-            max_text_length: maxTextLength || text.length,
-            final_text_length: text.length,
-            input_event_count: inputEventCount
-        };
-    }
-
-    const response = await fetch(endpoint, {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify(payload)
-    });
-
-    const data = await response.json();
-
-    document.getElementById("moduleLabel").innerText = data.module;
-
-    if (selectedModule === "text") {
+        const data = await response.json();
         const metrics = data.raw_metrics;
-        document.getElementById("productTitle").innerText = "Producto textual";
+
+        document.getElementById("moduleLabel").innerText = data.module;
+        document.getElementById("productTitle").innerText = "Análisis textual descriptivo";
 
         document.getElementById("metrics").innerHTML = `
             <div class="metric"><strong>Palabras:</strong> ${metrics.word_count}</div>
@@ -2183,19 +2253,73 @@ async function runScriptora() {
 
         document.getElementById("scores").innerHTML = "";
         document.getElementById("interpretation").innerText = data.interpretation;
+        return;
     }
 
-    if (selectedModule === "write_product") {
+    if (analysisMode === "writing_product") {
+        const response = await fetch("/api/write/evaluate", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                text: text,
+                language: "es",
+                level: level,
+                genre: genre,
+                task: "open_writing_task",
+                purpose: "writing_product_evaluation"
+            })
+        });
+
+        const data = await response.json();
+        document.getElementById("moduleLabel").innerText = data.module;
         renderWritingProduct(data.writing_metrics);
+        return;
     }
 
-    if (selectedModule === "write_process") {
+    if (analysisMode === "writing_process") {
+        if (!processClosed) {
+            freezeProcess();
+        }
+
+        const response = await fetch("/api/write/process-evaluate", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                text: text,
+                language: "es",
+                level: level,
+                genre: genre,
+                task: "open_writing_task",
+                purpose: "process_writing_evaluation",
+                writing_mode: "live",
+                total_time_seconds: finalTotalTimeSeconds,
+                initial_latency_seconds: finalInitialLatencySeconds,
+                pause_count: longPauseCount,
+                long_pause_count: longPauseCount,
+                edit_count: editCount,
+                deletion_count: deletionCount,
+                insertion_count: insertionCount,
+                local_adjustment_count: localAdjustmentCount,
+                reformulation_count: reformulationCount,
+                expansion_count: expansionCount,
+                reduction_count: reductionCount,
+                macro_adjustment_count: macroAdjustmentCount,
+                max_text_length: maxTextLength || text.length,
+                final_text_length: text.length,
+                input_event_count: inputEventCount
+            })
+        });
+
+        const data = await response.json();
+
+        document.getElementById("moduleLabel").innerText = data.module;
+
         const product = data.product_metrics;
         const process = data.process_metrics;
 
         renderWritingProduct(product);
 
-        document.getElementById("processSection").style.display = "block";
+        document.getElementById("processSectionResult").style.display = "block";
 
         document.getElementById("processMetrics").innerHTML = `
             <div class="metric"><strong>Modo de ingreso:</strong> ${process.writing_mode}</div>
@@ -2303,8 +2427,8 @@ function renderMultiPreview(results) {
 }
 
 async function downloadExcel() {
-    const selectedModule = currentModule();
-    const writingMode = document.getElementById("writingMode").value;
+    const analysisMode = currentAnalysisMode();
+    const entryMode = currentEntryMode();
     const text = document.getElementById("textInput").value;
     const level = document.getElementById("level").value;
     const genre = document.getElementById("genre").value;
@@ -2314,13 +2438,13 @@ async function downloadExcel() {
         return;
     }
 
-    if (isMultiModule()) {
+    if (entryMode === "pasted_multi") {
         const response = await fetch("/api/export/multi-excel", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({
                 raw_input: text,
-                selected_module: selectedModule,
+                analysis_mode: analysisMode,
                 language: "es",
                 level: level,
                 genre: genre,
@@ -2334,32 +2458,24 @@ async function downloadExcel() {
         }
 
         const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = "scriptora_multitexto_v0_9_2.xlsx";
-        document.body.appendChild(a);
-        a.click();
-
-        a.remove();
-        window.URL.revokeObjectURL(url);
+        downloadBlob(blob, "scriptora_multitexto_v0_9_3.xlsx");
         return;
     }
 
-    if (selectedModule === "write_process" && !processClosed) {
+    if (analysisMode === "writing_process" && !processClosed) {
         freezeProcess();
     }
 
     const payload = {
-        selected_module: selectedModule,
+        analysis_mode: analysisMode,
+        entry_mode: entryMode,
         text: text,
         language: "es",
         level: level,
         genre: genre,
         task: "open_writing_task",
         purpose: "scriptora_excel_export",
-        writing_mode: writingMode,
+        writing_mode: isProcessMode() ? "live" : "pasted",
         total_time_seconds: finalTotalTimeSeconds,
         initial_latency_seconds: finalInitialLatencySeconds,
         pause_count: longPauseCount,
@@ -2389,16 +2505,7 @@ async function downloadExcel() {
     }
 
     const blob = await response.blob();
-    const url = window.URL.createObjectURL(blob);
-
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "scriptora_resultados_v0_9_2.xlsx";
-    document.body.appendChild(a);
-    a.click();
-
-    a.remove();
-    window.URL.revokeObjectURL(url);
+    downloadBlob(blob, "scriptora_resultados_v0_9_3.xlsx");
 }
 </script>
 </body>
@@ -2415,7 +2522,7 @@ def health():
     return {
         "status": "ok",
         "service": "Scriptora Suite",
-        "version": "0.9.2",
+        "version": "0.9.3",
         "timestamp": datetime.utcnow().isoformat(),
         "participant_submissions": len(PARTICIPANT_SUBMISSIONS)
     }
@@ -2427,7 +2534,7 @@ def analyze_text(request: TextAnalysisRequest):
 
     return {
         "module": "Scriptora T · Text Analysis",
-        "version": "0.9.2",
+        "version": "0.9.3",
         "language": request.language,
         "context": request.context,
         "level": request.level,
@@ -2455,7 +2562,7 @@ def evaluate_writing(request: WritingEvaluationRequest):
 
     return {
         "module": "Scriptora W · Writing Product Evaluation",
-        "version": "0.9.2",
+        "version": "0.9.3",
         "language": request.language,
         "level": request.level,
         "genre": request.genre,
@@ -2481,7 +2588,7 @@ def evaluate_writing_process(request: WritingProcessRequest):
 
     return {
         "module": "Scriptora W · Product + Process Evaluation",
-        "version": "0.9.2",
+        "version": "0.9.3",
         "language": request.language,
         "level": request.level,
         "genre": request.genre,
@@ -2497,15 +2604,16 @@ def evaluate_writing_process(request: WritingProcessRequest):
 def multi_analyze(request: MultiTextRequest):
     results = analyze_multitext(request)
 
-    module_label = "Scriptora T · Multitexto" if request.selected_module == "text_multi" else "Scriptora W · Producto multitexto"
+    module_label = "Scriptora T · Multitexto" if request.analysis_mode == "text_analysis" else "Scriptora W · Producto multitexto"
 
     return {
         "module": module_label,
-        "version": "0.9.2",
+        "version": "0.9.3",
         "total_texts": len(results),
         "language": request.language,
         "level": request.level,
         "genre": request.genre,
+        "analysis_mode": request.analysis_mode,
         "results": results
     }
 
@@ -2535,7 +2643,7 @@ def participant_list():
 @app.get("/api/participant/export-excel")
 def participant_export_excel():
     output = create_participant_excel()
-    filename = f"scriptora_respuestas_participantes_v0_9_2_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    filename = f"scriptora_respuestas_participantes_v0_9_3_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
 
     return StreamingResponse(
         output,
@@ -2558,7 +2666,10 @@ def participant_clear():
 
 
 @app.post("/api/corpus/upload-excel")
-async def corpus_upload_excel(file: UploadFile = File(...)):
+async def corpus_upload_excel(
+    file: UploadFile = File(...),
+    analysis_mode: str = Form("writing_product")
+):
     if not file.filename.lower().endswith(".xlsx"):
         return HTMLResponse(
             content="El archivo debe tener formato .xlsx",
@@ -2567,10 +2678,10 @@ async def corpus_upload_excel(file: UploadFile = File(...)):
 
     try:
         file_bytes = await file.read()
-        rows = process_corpus_excel(file_bytes)
-        output = create_corpus_excel(rows)
+        rows = process_corpus_excel(file_bytes, analysis_mode=analysis_mode)
+        output = create_corpus_excel(rows, analysis_mode=analysis_mode)
 
-        filename = f"scriptora_corpus_resultados_v0_9_2_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        filename = f"scriptora_corpus_resultados_v0_9_3_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
 
         return StreamingResponse(
             output,
@@ -2593,13 +2704,15 @@ def export_excel(request: ExcelExportRequest):
     timestamp = datetime.utcnow().isoformat()
 
     text = request.text.strip()
-    selected_module = request.selected_module
+    analysis_mode = request.analysis_mode
+    entry_mode = request.entry_mode
 
     resultados = {
         "analysis_id": analysis_id,
         "timestamp_utc": timestamp,
-        "scriptora_version": "0.9.2",
-        "selected_module": selected_module,
+        "scriptora_version": "0.9.3",
+        "analysis_mode": analysis_mode,
+        "entry_mode": entry_mode,
         "language": request.language,
         "level": request.level,
         "genre": request.genre,
@@ -2609,7 +2722,7 @@ def export_excel(request: ExcelExportRequest):
         "texto_original": text
     }
 
-    if selected_module == "text":
+    if analysis_mode == "text_analysis":
         metrics = analyze_text_core(text)
 
         resultados.update({
@@ -2617,7 +2730,7 @@ def export_excel(request: ExcelExportRequest):
             **metrics
         })
 
-    elif selected_module == "write_product":
+    elif analysis_mode == "writing_product":
         product_metrics = score_writing_product(
             text=text,
             genre=request.genre or "general"
@@ -2656,8 +2769,10 @@ def export_excel(request: ExcelExportRequest):
     metadatos = {
         "analysis_id": analysis_id,
         "timestamp_utc": timestamp,
-        "scriptora_version": "0.9.2",
-        "archivo_generado": "scriptora_resultados_v0_9_2.xlsx",
+        "scriptora_version": "0.9.3",
+        "analysis_mode": analysis_mode,
+        "entry_mode": entry_mode,
+        "archivo_generado": "scriptora_resultados_v0_9_3.xlsx",
         "hoja_resultados_vertical": "Resultados en formato vertical legible.",
         "hoja_matriz_analisis": "Resultados en formato horizontal para análisis estadístico.",
         "hoja_diccionario_variables": "Definiciones operativas de las variables incluidas.",
@@ -2673,7 +2788,7 @@ def export_excel(request: ExcelExportRequest):
 
     output = create_single_analysis_excel(excel_data)
 
-    filename = f"scriptora_resultados_v0_9_2_{analysis_id[:8]}.xlsx"
+    filename = f"scriptora_resultados_v0_9_3_{analysis_id[:8]}.xlsx"
 
     return StreamingResponse(
         output,
@@ -2694,9 +2809,9 @@ def export_multi_excel(request: MultiExcelExportRequest):
     metadata = {
         "analysis_id": analysis_id,
         "timestamp_utc": timestamp,
-        "scriptora_version": "0.9.2",
-        "archivo_generado": "scriptora_multitexto_v0_9_2.xlsx",
-        "selected_module": request.selected_module,
+        "scriptora_version": "0.9.3",
+        "archivo_generado": "scriptora_multitexto_v0_9_3.xlsx",
+        "analysis_mode": request.analysis_mode,
         "language": request.language,
         "level": request.level,
         "genre": request.genre,
@@ -2710,7 +2825,7 @@ def export_multi_excel(request: MultiExcelExportRequest):
 
     output = create_multi_analysis_excel(rows, metadata)
 
-    filename = f"scriptora_multitexto_v0_9_2_{analysis_id[:8]}.xlsx"
+    filename = f"scriptora_multitexto_v0_9_3_{analysis_id[:8]}.xlsx"
 
     return StreamingResponse(
         output,
@@ -2762,8 +2877,14 @@ def list_benchmarks():
                 "status": "prototype"
             },
             {
-                "benchmark_id": "ES_CORPUS_EXCEL_UPLOAD_V1",
+                "benchmark_id": "ES_CORPUS_EXCEL_UPLOAD_V2",
                 "module": "Scriptora · Corpus Excel",
+                "language": "es",
+                "status": "prototype"
+            },
+            {
+                "benchmark_id": "ES_RESEARCHER_INTERFACE_CLEANUP_V1",
+                "module": "Scriptora · Interfaz investigador",
                 "language": "es",
                 "status": "prototype"
             }
