@@ -12,7 +12,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
 
-SCRIPTORA_VERSION = "0.9.7"
+SCRIPTORA_VERSION = "0.9.8"
 
 
 app = FastAPI(
@@ -1449,7 +1449,7 @@ def home():
         <input id="participantId" placeholder="Ejemplo: sujeto_001">
 
         <label>Tu respuesta</label>
-        <textarea id="participantText" placeholder="Escribe aquí tu respuesta..."></textarea>
+        <textarea id="participantText" placeholder="Escribe aquí tu respuesta..." oninput="updateParticipantWordCounter()"></textarea>
         <div id="participantWordCounter" class="note">Palabras: 0 · mínimo requerido: 50 · rango sugerido: 80–120</div>
 
         <button id="participantSubmitButton" onclick="submitParticipantResponse()">Enviar respuesta</button>
@@ -1636,7 +1636,7 @@ const REFORMULATION_DELTA = 20;
 let participantStartTime = null;
 
 function countWordsSimple(text) {{
-    return text.trim().split(/\s+/).filter(w => w.length > 0).length;
+    return text.trim() === "" ? 0 : text.trim().split(new RegExp("\\s+")).filter(w => w.length > 0).length;
 }}
 
 function updateParticipantWordCounter() {{
@@ -1691,6 +1691,7 @@ function enterParticipant() {{
     document.getElementById("participantConfirmation").style.display = "none";
     participantStartTime = Date.now();
     updateParticipantWordCounter();
+    setTimeout(updateParticipantWordCounter, 50);
 }}
 
 function enterResearcher() {{
