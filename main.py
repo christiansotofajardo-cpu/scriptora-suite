@@ -12,7 +12,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
 
-SCRIPTORA_VERSION = "0.9.6"
+SCRIPTORA_VERSION = "0.9.7"
 
 
 app = FastAPI(
@@ -1452,7 +1452,7 @@ def home():
         <textarea id="participantText" placeholder="Escribe aquí tu respuesta..."></textarea>
         <div id="participantWordCounter" class="note">Palabras: 0 · mínimo requerido: 50 · rango sugerido: 80–120</div>
 
-        <button onclick="submitParticipantResponse()">Enviar respuesta</button>
+        <button id="participantSubmitButton" onclick="submitParticipantResponse()">Enviar respuesta</button>
 
         <div id="participantConfirmation" class="success">
             <h2>Respuesta enviada</h2>
@@ -1636,24 +1636,49 @@ const REFORMULATION_DELTA = 20;
 let participantStartTime = null;
 
 function countWordsSimple(text) {{
-    return text.trim().split(/\\s+/).filter(w => w.length > 0).length;
+    return text.trim().split(/\s+/).filter(w => w.length > 0).length;
 }}
 
 function updateParticipantWordCounter() {{
     const text = document.getElementById("participantText").value;
     const count = countWordsSimple(text);
     const counter = document.getElementById("participantWordCounter");
+    const button = document.getElementById("participantSubmitButton");
     if (!counter) return;
 
-    let status = "mínimo requerido: 50 · rango sugerido: 80–120";
+    let status = "";
     if (count < 50) {{
         status = "faltan " + (50 - count) + " palabras para poder enviar";
+        counter.style.color = "#92400e";
+        if (button) {{
+            button.disabled = true;
+            button.style.opacity = "0.55";
+            button.style.cursor = "not-allowed";
+        }}
     }} else if (count < 80) {{
-        status = "ya puedes enviar · sugerido: agregar " + (80 - count) + " palabras";
+        status = "ya puedes enviar · sugerido: agregar " + (80 - count) + " palabras para llegar al rango ideal";
+        counter.style.color = "#1d4ed8";
+        if (button) {{
+            button.disabled = false;
+            button.style.opacity = "1";
+            button.style.cursor = "pointer";
+        }}
     }} else if (count <= 120) {{
         status = "rango sugerido logrado";
+        counter.style.color = "#047857";
+        if (button) {{
+            button.disabled = false;
+            button.style.opacity = "1";
+            button.style.cursor = "pointer";
+        }}
     }} else {{
-        status = "sobre el rango sugerido";
+        status = "puedes enviar, pero estás " + (count - 120) + " palabras sobre el rango sugerido";
+        counter.style.color = "#b45309";
+        if (button) {{
+            button.disabled = false;
+            button.style.opacity = "1";
+            button.style.cursor = "pointer";
+        }}
     }}
 
     counter.innerText = "Palabras: " + count + " · " + status;
