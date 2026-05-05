@@ -12,7 +12,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
 
-SCRIPTORA_VERSION = "0.9.10"
+SCRIPTORA_VERSION = "0.9.11"
 
 
 app = FastAPI(
@@ -1642,45 +1642,33 @@ function countWordsSimple(text) {{
 }}
 
 function updateParticipantWordCounter() {{
-    const text = document.getElementById("participantText").value;
+    const text = document.getElementById("participantText").value || "";
     const count = countWordsSimple(text);
     const counter = document.getElementById("participantWordCounter");
     const button = document.getElementById("participantSubmitButton");
+
+    if (button) {{
+        button.disabled = false;
+        button.removeAttribute("disabled");
+        button.style.opacity = "1";
+        button.style.cursor = "pointer";
+    }}
+
     if (!counter) return;
 
     let status = "";
     if (count < 50) {{
         status = "faltan " + (50 - count) + " palabras para poder enviar";
         counter.style.color = "#92400e";
-        if (button) {{
-            button.removeAttribute("disabled");
-            button.style.opacity = "1";
-            button.style.cursor = "pointer";
-        }}
     }} else if (count < 80) {{
         status = "ya puedes enviar · sugerido: agregar " + (80 - count) + " palabras para llegar al rango ideal";
         counter.style.color = "#1d4ed8";
-        if (button) {{
-            button.removeAttribute("disabled");
-            button.style.opacity = "1";
-            button.style.cursor = "pointer";
-        }}
     }} else if (count <= 120) {{
         status = "rango sugerido logrado";
         counter.style.color = "#047857";
-        if (button) {{
-            button.removeAttribute("disabled");
-            button.style.opacity = "1";
-            button.style.cursor = "pointer";
-        }}
     }} else {{
         status = "puedes enviar, pero estás " + (count - 120) + " palabras sobre el rango sugerido";
         counter.style.color = "#b45309";
-        if (button) {{
-            button.removeAttribute("disabled");
-            button.style.opacity = "1";
-            button.style.cursor = "pointer";
-        }}
     }}
 
     counter.innerText = "Palabras: " + count + " · " + status;
@@ -1710,42 +1698,58 @@ function goHome() {{
 }}
 
 async function submitParticipantResponse() {{
-    const text = document.getElementById("participantText").value;
-    const participantId = document.getElementById("participantId").value;
+    const text = document.getElementById("participantText").value || "";
+    const participantId = document.getElementById("participantId").value || "";
+    const wordCount = countWordsSimple(text);
+
+    updateParticipantWordCounter();
 
     if (!text.trim()) {{
         alert("Por favor escribe una respuesta antes de enviar.");
         return;
     }}
 
-    const response = await fetch("/api/participant/submit", {{
-        method: "POST",
-        headers: {{"Content-Type": "application/json"}},
-        body: JSON.stringify({{
-            participant_id: participantId,
-            text: text,
-            language: "es",
-            level: "general",
-            genre: "argumentativo",
-            task: "participant_writing_task",
-            purpose: "silent_participant_submission",
-            total_time_seconds: participantTotalTime,
-            task_version: "IA_opinion_v1",
-            min_words_required: 50,
-            suggested_word_range: "80-120"
-        }})
-    }});
-
-    if (!response.ok) {{
-        const detail = await response.text();
-        alert("No se pudo registrar la respuesta. Detalle: " + detail);
+    if (wordCount < 50) {{
+        alert("Aún faltan " + (50 - wordCount) + " palabras para poder enviar la respuesta. Actualmente tiene " + wordCount + " palabras.");
         return;
     }}
 
-    document.getElementById("participantText").value = "";
-    participantStartTime = Date.now();
-    updateParticipantWordCounter();
-    document.getElementById("participantConfirmation").style.display = "block";
+    const participantTotalTime = participantStartTime ? Math.round((Date.now() - participantStartTime) / 1000) : 0;
+
+    try {{
+        const response = await fetch("/api/participant/submit", {{
+            method: "POST",
+            headers: {{"Content-Type": "application/json"}},
+            body: JSON.stringify({{
+                participant_id: participantId,
+                text: text,
+                language: "es",
+                level: "general",
+                genre: "argumentativo",
+                task: "participant_writing_task",
+                purpose: "silent_participant_submission",
+                total_time_seconds: participantTotalTime,
+                task_version: "IA_opinion_v1",
+                min_words_required: 50,
+                suggested_word_range: "80-120"
+            }})
+        }});
+
+        if (!response.ok) {{
+            const detail = await response.text();
+            alert("No se pudo registrar la respuesta. Detalle: " + detail);
+            return;
+        }}
+
+        document.getElementById("participantText").value = "";
+        participantStartTime = Date.now();
+        updateParticipantWordCounter();
+        document.getElementById("participantConfirmation").style.display = "block";
+        alert("Respuesta enviada correctamente.");
+
+    }} catch (error) {{
+        alert("No se pudo enviar la respuesta. Error: " + error);
+    }}
 }}
 
 async function downloadParticipantExcel() {{
@@ -2621,3 +2625,4 @@ def export_excel(request: ExcelExportRequest):
             "Content-Disposition": f"attachment; filename={filename}"
         }
     )
+
